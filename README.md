@@ -7,7 +7,7 @@
 
 ## 🚀 快速开始
 
-### 1. 安装（国内加速源）
+### 1. 安装（使用了国内加速源）
 ```bash
 git clone https://hk.gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
@@ -23,7 +23,7 @@ nano /opt/montecarlo-ip-searcher/config.json
 * **zone_id**: 域名 Zone ID
 * **domain**: 优选域名 (如 `best.example.com`)
 
-### 3. 使用
+### 3. 使用（友情提醒：在优选时关闭机器的代理网络）
 * **手动运行**: `cfip`
 * **查看日志**: `tail -f /opt/montecarlo-ip-searcher/cron.log`
 
