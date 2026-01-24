@@ -5,14 +5,14 @@
 
 ## 🚀 快速开始
 
-### 1. 安装
+### 1. 安装（国内加速源）
 ```bash
-git clone https://github.com/coldboy404/cfipup2dns.git
+git clone https://hk.gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash install.sh
 ```
 
-### 2. 配置 (必须!)
+### 2. 配置 (也可在前面脚本执行完通过命令行提示输入)
 安装后请修改配置文件，填入你的 Cloudflare 信息：
 ```bash
 nano /opt/montecarlo-ip-searcher/config.json
