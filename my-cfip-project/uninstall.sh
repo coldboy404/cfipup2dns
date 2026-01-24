@@ -26,9 +26,7 @@ pkill -f montecarlo-ip-searcher
 pkill -f cfip
 
 echo -e "${YELLOW}[*] 2. 正在清理定时任务 (Crontab)...${PLAIN}"
-# 备份现有的 crontab
 crontab -l > /tmp/cron.bak 2>/dev/null
-# 过滤掉包含 cfip 和 montecarlo 的行，然后重新写入
 crontab -l 2>/dev/null | grep -v "cfip" | grep -v "montecarlo-ip-searcher" | crontab -
 echo "定时任务已清理。"
 
@@ -41,7 +39,6 @@ echo "项目文件已删除。"
 echo -e "${YELLOW}[*] 4. 正在卸载 Go 语言环境...${PLAIN}"
 rm -rf /usr/local/go
 rm -rf /root/go
-# 清理环境变量（如果是写在 profile 里的）
 sed -i '/\/usr\/local\/go\/bin/d' /etc/profile
 sed -i '/\/usr\/local\/go\/bin/d' ~/.bashrc
 source /etc/profile 2>/dev/null
@@ -50,4 +47,3 @@ echo "Go 环境已清理。"
 echo -e "${GREEN}==============================================${PLAIN}"
 echo -e "${GREEN}   卸载完成！系统已恢复纯净。   ${PLAIN}"
 echo -e "${GREEN}==============================================${PLAIN}"
-echo -e "提示：系统依赖工具 jq, wget, git 依然保留，以免影响其他软件。"
