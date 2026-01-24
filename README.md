@@ -28,6 +28,7 @@ nano /opt/montecarlo-ip-searcher/config.json
 * **domain**: 优选域名 (如 `best.example.com`)
 
 ### 3. 使用（友情提醒：在优选时关闭机器的代理网络）
+每次优选预估5到10分钟
 * **手动运行**: `cfip`
 * **查看日志**: `tail -f /opt/montecarlo-ip-searcher/cron.log`
 
