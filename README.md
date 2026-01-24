@@ -1,24 +1,21 @@
-# Cloudflare 优选 IP 自动测速与解析脚本 (Shell版)
+# cfipup2dns - Cloudflare 优选 IP 自动上传
 
-这是一个基于 [MonteCarlo IP Searcher](https://github.com/Leo-Mu/montecarlo-ip-searcher) 的自动化脚本套件。
+自动测速筛选 Cloudflare **Top 5** 最快 IP，并解析到你的域名。
 
-## 功能特点
-1. **全自动安装**：自动解决 Go 环境、依赖问题。
-2. **国内优化**：内置国内加速源，自动生成 IP 库，适应国内网络环境。
-3. **智能优选**：自动筛选**速度最快**的 Top 10 IP。
-4. **自动解析**：自动将优选结果更新到 Cloudflare DNS。
-5. **无人值守**：支持开机自启和每 30 分钟自动运行。
+## 特点
+* 专为国内网络环境优化
+* 自动筛选下载速度最快的 5 个 IP
+* 自动清理旧记录并更新 DNS
+* 支持 Cron 定时任务
 
-## 使用方法
+## 安装
+```bash
+git clone https://github.com/coldboy404/cfipup2dns.git
+cd cfipup2dns
+bash install.sh
+```
 
-1. 下载脚本：
-   `git clone https://github.com/coldboy404/cfip2ddns.git`
-   
-2. 进入目录：
-   `cd cfip2ddns`
-
-3. 运行安装：
-   `bash install.sh`
-
-4. 日常使用：
-   `cfip`
+## 使用
+```bash
+cfip
+```
