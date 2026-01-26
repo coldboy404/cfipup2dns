@@ -25,7 +25,7 @@ nano /opt/montecarlo-ip-searcher/config.json
 ```
 * **token**: Cloudflare API Token
 * **zone_id**: 域名 Zone ID
-* **domain**: 优选域名 (如 `best.example.com`)
+* **domain**: 你自己的域名 (如 `cf.example.com`)
 
 ### 3. 使用（友情提醒：在优选时关闭机器的代理网络）
 每次优选预估5到10分钟
