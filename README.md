@@ -32,7 +32,7 @@ nano /opt/montecarlo-ip-searcher/config.json
 * **手动运行**: `cfip`
 * **查看日志**: `tail -f /opt/montecarlo-ip-searcher/cron.log`
 
-*(脚本已自动配置每 30 分钟运行一次，并开机自启)*
+*(脚本已自动配置每 2小时 运行一次，并开机自启)*
 
 ## 🗑️ 卸载
 ```bash
