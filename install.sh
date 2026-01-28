@@ -178,8 +178,8 @@ SCRIPT
 chmod +x /usr/local/bin/cfip
 
 # 7. 添加定时任务
-echo -e "${GREEN}[*] 7. 设置定时任务 (每30分钟)...${PLAIN}"
-(crontab -l 2>/dev/null | grep -v "cfip"; echo "*/30 * * * * /bin/bash /usr/local/bin/cfip >> /opt/montecarlo-ip-searcher/cron.log 2>&1") | crontab -
+echo -e "${GREEN}[*] 7. 设置定时任务 (每两小时)...${PLAIN}"
+(crontab -l 2>/dev/null | grep -v "cfip"; echo "0 */2 * * * /bin/bash /usr/local/bin/cfip >> /opt/montecarlo-ip-searcher/cron.log 2>&1") | crontab -
 (crontab -l 2>/dev/null | grep -v "@reboot"; echo "@reboot sleep 60 && /bin/bash /usr/local/bin/cfip >> /opt/montecarlo-ip-searcher/boot.log 2>&1") | crontab -
 
 echo -e "${GREEN}=========================================${PLAIN}"
