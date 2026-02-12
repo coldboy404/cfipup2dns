@@ -119,6 +119,8 @@ echo -e "${GREEN}[*] 7. 设置定时任务 (每2小时)...${PLAIN}"
 (crontab -l 2>/dev/null | grep -v "cfip"; echo "0 */2 * * * /bin/bash /usr/local/bin/cfip >> $PROJECT_DIR/cron.log 2>&1") | crontab -
 (crontab -l 2>/dev/null | grep -v "@reboot"; echo "@reboot sleep 60 && /bin/bash /usr/local/bin/cfip >> $PROJECT_DIR/boot.log 2>&1") | crontab -
 
+echo -e "${GREEN}[*] 8. 输入快捷脚本 cfip 可立即运行一次${PLAIN}"
+
 echo -e "${GREEN}=============================================${PLAIN}"
 echo -e "${GREEN}   安装完成！请输入 cfip 立即运行测试。   ${PLAIN}"
 echo -e "${GREEN}=============================================${PLAIN}"
