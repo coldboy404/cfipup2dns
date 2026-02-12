@@ -1,0 +1,6 @@
+# ignore local/system files
+.bashrc
+.profile
+.wget-hsts
+.cache/
+.config/
