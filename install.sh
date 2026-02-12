@@ -11,6 +11,7 @@ if [[ $EUID -ne 0 ]]; then echo -e "${RED}请使用 root 运行${PLAIN}"; exit 1
 
 PROJECT_DIR="/opt/montecarlo-ip-searcher"
 REPO_URL="https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
+REPO_URL_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 1. 基础环境准备
@@ -35,7 +36,7 @@ if [ -d "$PROJECT_DIR/.git" ]; then
     git -C "$PROJECT_DIR" pull --rebase
 else
     rm -rf "$PROJECT_DIR"
-    git clone "$REPO_URL" "$PROJECT_DIR"
+    git clone "$REPO_URL" "$PROJECT_DIR" || git clone "$REPO_URL_PROXY" "$PROJECT_DIR"
 fi
 cd "$PROJECT_DIR" || exit 1
 
