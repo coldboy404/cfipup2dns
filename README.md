@@ -1,7 +1,7 @@
 # cfipup2dns
 
 专为**国内网络**优化的 Cloudflare 优选 IP 自动 DDNS 工具。
-自动筛选**下载速度最快 (Mbps)** 的 Top 5 IP 并更新到 DNS。
+自动筛选**下载速度最快 (Mbps)** 的 Top N IP（默认 5）并更新到 DNS。
 
 > 💡 **致谢**：项目灵感来自 [Leo-Mu/montecarlo-ip-searcher](https://github.com/Leo-Mu/montecarlo-ip-searcher)，感谢大佬的开源，本项目为了简化部署流程而作。
 
@@ -33,6 +33,20 @@ nano /opt/montecarlo-ip-searcher/config.json
 * **查看日志**: `tail -f /opt/montecarlo-ip-searcher/cron.log`
 
 *(脚本已自动配置每 2小时 运行一次，并开机自启)*
+
+### 4. 可选参数（环境变量覆盖）
+可通过环境变量调整测速策略：
+```
+TOP_N=5            # 选取多少个最快 IP
+TOP_TEST=50        # 参与详细测速的数量
+DOWNLOAD_BYTES=5000000
+DOWNLOAD_TIMEOUT=8s
+CONCURRENCY=50
+```
+示例：
+```bash
+TOP_N=3 TOP_TEST=30 cfip
+```
 
 ## 🗑️ 卸载
 ```bash
