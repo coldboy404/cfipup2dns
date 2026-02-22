@@ -33,9 +33,10 @@ bash install.sh
 cd cfipup2dns && git pull && bash install.sh
 ```
 
-安装后会提供两个命令：
-- `cfip`：直接执行优选
-- `cfip-menu`：交互式菜单管理
+安装后会提供命令：
+- `cfip-run`：直接执行优选
+- `cfip`：交互式菜单管理
+- `cfip-menu`：兼容别名（同菜单）
 
 ---
 
@@ -44,7 +45,7 @@ cd cfipup2dns && git pull && bash install.sh
 执行：
 
 ```bash
-cfip-menu
+cfip
 ```
 
 菜单支持：
@@ -77,14 +78,14 @@ cfip-menu
 
 ## 默认行为（已改）
 
-`cfip` 默认会执行 **双栈更新**：
+`cfip-run` 默认会执行 **双栈更新**：
 - **IPv4：筛选并写入 5 个 A 记录**
 - **IPv6：筛选并写入 5 个 AAAA 记录**
 
 等价于：
 
 ```bash
-IP_MODE=both TOP_N=5 cfip
+IP_MODE=both TOP_N=5 cfip-run
 ```
 
 ---
@@ -125,25 +126,25 @@ MCIS_EXTRA_ARGS="-v"
 
 ```bash
 # 默认：同时更新 IPv4(5) + IPv6(5)
-cfip
+cfip-run
 
 # 仅 IPv4，写 3 个 A 记录
-IP_MODE=4 TOP_N=3 cfip
+IP_MODE=4 TOP_N=3 cfip-run
 
 # 仅 IPv6，写 3 个 AAAA 记录
-IP_MODE=6 TOP_N=3 cfip
+IP_MODE=6 TOP_N=3 cfip-run
 
 # 双栈 + 多轮 + 限定机房
-IP_MODE=both ROUNDS=6 SKIP_FIRST=1 COLO_ALLOW=HKG,SIN TOP_N=5 cfip
+IP_MODE=both ROUNDS=6 SKIP_FIRST=1 COLO_ALLOW=HKG,SIN TOP_N=5 cfip-run
 
 # 用自定义大文件测速
-DOWNLOAD_URL=https://your-domain.com/large.bin DOWNLOAD_TOP=20 cfip
+DOWNLOAD_URL=https://your-domain.com/large.bin DOWNLOAD_TOP=20 cfip-run
 ```
 
 查看帮助：
 
 ```bash
-cfip --help
+cfip-run --help
 ```
 
 ---

@@ -39,7 +39,7 @@ quick_deploy() {
   read -rp "是否立即执行一次优选？(Y/n): " ans
   ans=${ans:-Y}
   if [[ "$ans" =~ ^[Yy]$ ]]; then
-    /usr/local/bin/cfip || true
+    /usr/local/bin/cfip-run || true
   fi
 }
 
@@ -99,7 +99,7 @@ run_once() {
   read -rp "每种写入数量 TOP_N [5]: " topn
   mode=${mode:-both}
   topn=${topn:-5}
-  IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip
+  IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip-run
 }
 
 show_logs() {
@@ -112,7 +112,8 @@ show_logs() {
 
 check_status() {
   echo -e "${YELLOW}[*] 快速状态${PLAIN}"
-  command -v /usr/local/bin/cfip >/dev/null 2>&1 && echo "cfip: 已安装" || echo "cfip: 未安装"
+  command -v /usr/local/bin/cfip-run >/dev/null 2>&1 && echo "cfip-run: 已安装" || echo "cfip-run: 未安装"
+  command -v /usr/local/bin/cfip >/dev/null 2>&1 && echo "cfip(menu): 已安装" || echo "cfip(menu): 未安装"
   [[ -x "$PROJECT_DIR/montecarlo-ip-searcher" ]] && echo "mcis: 已安装" || echo "mcis: 未安装"
   [[ -f "$CONFIG_FILE" ]] && echo "config: $CONFIG_FILE" || echo "config: 未配置"
   echo
