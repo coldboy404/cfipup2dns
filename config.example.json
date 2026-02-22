@@ -2,6 +2,8 @@
   "cloudflare": {
     "token": "你的_CF_TOKEN_填在这里",
     "zone_id": "你的_ZONE_ID_填在这里",
-    "domain": "你的域名.com"
+    "domain": "cf.example.com",
+    "ttl": 60,
+    "proxied": false
   }
 }
