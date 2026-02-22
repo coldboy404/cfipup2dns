@@ -20,6 +20,8 @@ UPSTREAM_REPO_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-i
 
 mkdir -p "$TMP_ASSETS_DIR" "$PROJECT_DIR"
 
+log() { echo -e "$1"; }
+
 fetch_asset() {
   local name="$1"
   local dst="$TMP_ASSETS_DIR/$name"
@@ -27,24 +29,55 @@ fetch_asset() {
     || curl -fsSL "$RAW_BASE_PROXY/$name" -o "$dst"
 }
 
-download_mcis_release() {
-  local arch rel_arch tag url url_proxy tgz
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) rel_arch="amd64" ;;
-    aarch64|arm64) rel_arch="arm64" ;;
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      MCIS_ARCH="amd64"
+      GO_ARCH="amd64"
+      ;;
+    aarch64|arm64)
+      MCIS_ARCH="arm64"
+      GO_ARCH="arm64"
+      ;;
     *)
-      echo -e "${RED}[!] 不支持的架构: $arch（当前仅支持 amd64/arm64）${PLAIN}"
+      echo -e "${RED}[!] 不支持的架构: $(uname -m)（当前仅支持 amd64/arm64）${PLAIN}"
       return 1
       ;;
   esac
+}
 
+install_prereqs() {
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y jq wget git curl ca-certificates tar cron || \
+    apt-get install -y jq wget git curl ca-certificates tar
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y jq wget git curl ca-certificates tar cronie || \
+    dnf install -y jq wget git curl ca-certificates tar
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y jq wget git curl ca-certificates tar cronie || \
+    yum install -y jq wget git curl ca-certificates tar
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install jq wget git curl ca-certificates tar cron || \
+    zypper --non-interactive install jq wget git curl ca-certificates tar
+  elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm jq wget git curl ca-certificates tar cronie || \
+    pacman -Sy --noconfirm jq wget git curl ca-certificates tar
+  else
+    echo -e "${RED}[!] 未识别的包管理器（支持 apt/dnf/yum/zypper/pacman）${PLAIN}"
+    return 1
+  fi
+}
+
+download_mcis_release() {
+  local tag url url_proxy tgz
   tag="${MCIS_TAG:-v0.2.3}"
   tgz="$PROJECT_DIR/mcis-release.tgz"
-  url="https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/${tag}/mcis-${tag}-linux-${rel_arch}.tar.gz"
+  url="https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/${tag}/mcis-${tag}-linux-${MCIS_ARCH}.tar.gz"
   url_proxy="https://gh-proxy.com/${url}"
 
-  echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${rel_arch})${PLAIN}"
+  echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${MCIS_ARCH})${PLAIN}"
   curl -fL "$url" -o "$tgz" || curl -fL "$url_proxy" -o "$tgz"
 
   tar -xzf "$tgz" -C "$PROJECT_DIR"
@@ -61,10 +94,11 @@ download_mcis_release() {
 
 install_go() {
   local GO_VERSION="1.25.5"
-  local GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+  local GO_TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
   if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
     rm -rf /usr/local/go
-    wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz
+    wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz \
+      || curl -fL "https://go.dev/dl/${GO_TARBALL}" -o /tmp/go.tar.gz
     tar -C /usr/local -xzf /tmp/go.tar.gz
     rm -f /tmp/go.tar.gz
   fi
@@ -74,7 +108,7 @@ install_go() {
 }
 
 build_mcis_from_source() {
-  echo -e "${YELLOW}[*] 预编译二进制与系统 glibc 不兼容，切换源码编译...${PLAIN}"
+  echo -e "${YELLOW}[*] 使用源码编译 mcis（兼容旧 glibc 系统）...${PLAIN}"
   install_go
 
   if [[ -d "$PROJECT_DIR/.git" ]]; then
@@ -104,7 +138,7 @@ binary_self_check() {
   if [[ $code -eq 0 ]]; then
     return 0
   fi
-  if grep -q "GLIBC_" /tmp/mcis-selfcheck.log; then
+  if grep -q 'GLIBC_' /tmp/mcis-selfcheck.log; then
     return 2
   fi
   return 1
@@ -125,9 +159,24 @@ write_config() {
 EOF
 }
 
-echo -e "${GREEN}[*] 1/6 安装基础依赖...${PLAIN}"
-apt-get update
-apt-get install -y jq wget git curl ca-certificates tar
+setup_cron() {
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo -e "${YELLOW}[!] 未检测到 crontab，已跳过定时任务设置（可手动安装 cron/cronie）${PLAIN}"
+    return 0
+  fi
+  local CRON_TMP
+  CRON_TMP=$(mktemp)
+  crontab -l 2>/dev/null | grep -v "cfip-run" > "$CRON_TMP" || true
+  echo "0 */2 * * * /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$CRON_TMP"
+  echo "@reboot sleep 60 && /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$CRON_TMP"
+  crontab "$CRON_TMP"
+  rm -f "$CRON_TMP"
+}
+
+detect_arch
+
+echo -e "${GREEN}[*] 1/6 安装基础依赖（跨发行版）...${PLAIN}"
+install_prereqs
 
 echo -e "${GREEN}[*] 2/6 准备运行脚本资源...${PLAIN}"
 fetch_asset cfip.sh
@@ -190,13 +239,7 @@ echo -e "${GREEN}[*] 6/6 安装命令与定时任务...${PLAIN}"
 install -m 755 "$TMP_ASSETS_DIR/cfip.sh" /usr/local/bin/cfip-run
 install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip
 install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip-menu
-
-CRON_TMP=$(mktemp)
-crontab -l 2>/dev/null | grep -v "cfip-run" > "$CRON_TMP" || true
-echo "0 */2 * * * /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$CRON_TMP"
-echo "@reboot sleep 60 && /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$CRON_TMP"
-crontab "$CRON_TMP"
-rm -f "$CRON_TMP"
+setup_cron
 
 echo -e "${GREEN}=============================================${PLAIN}"
 echo -e "${GREEN}安装完成！${PLAIN}"
