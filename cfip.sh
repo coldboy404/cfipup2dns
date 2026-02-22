@@ -16,15 +16,15 @@ SKIP_FIRST="${SKIP_FIRST:-}"
 COLO_ALLOW="${COLO_ALLOW:-}"
 COLO_EXCLUDE="${COLO_EXCLUDE:-}"
 
-DOWNLOAD_TOP="${DOWNLOAD_TOP:-50}"
-DOWNLOAD_BYTES="${DOWNLOAD_BYTES:-5000000}"
-DOWNLOAD_TIMEOUT="${DOWNLOAD_TIMEOUT:-8s}"
+DOWNLOAD_TOP="${DOWNLOAD_TOP:-20}"
+DOWNLOAD_BYTES="${DOWNLOAD_BYTES:-2000000}"
+DOWNLOAD_TIMEOUT="${DOWNLOAD_TIMEOUT:-5s}"
 DOWNLOAD_URL="${DOWNLOAD_URL:-}"
 
-CONCURRENCY="${CONCURRENCY:-50}"
-TOP_TEST="${TOP_TEST:-50}"
+CONCURRENCY="${CONCURRENCY:-80}"
+TOP_TEST="${TOP_TEST:-20}"
 TOP_N="${TOP_N:-5}"                      # 每个模式写入的 IP 数量（默认每种 5 个）
-MAX_SCAN_SECONDS="${MAX_SCAN_SECONDS:-120}" # 单次模式扫描最长时长（秒）
+MAX_SCAN_SECONDS="${MAX_SCAN_SECONDS:-0}" # 单次模式扫描最长时长（秒），0=不限制
 MCIS_EXTRA_ARGS="${MCIS_EXTRA_ARGS:-}"
 
 # DNS 行为（可通过 config.json 或环境变量控制）
@@ -193,7 +193,7 @@ run_one_mode() {
   EXTRA_ARGS=( $MCIS_EXTRA_ARGS )
 
   set +e
-  if command -v timeout >/dev/null 2>&1; then
+  if [ "${MAX_SCAN_SECONDS:-0}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
     timeout --signal=INT "${MAX_SCAN_SECONDS}s" "$PROJECT_DIR/montecarlo-ip-searcher" "${MCIS_ARGS[@]}" "${EXTRA_ARGS[@]}" > "$result_file" 2>&1
     mcis_code=$?
   else
@@ -243,6 +243,8 @@ run_one_mode() {
   fi
 
   echo -e "${GREEN}[+] IPv${mode} 筛选成功！模式: ${SORT_MODE}，共 $IP_COUNT 个 IP${PLAIN}"
+  echo -e "${YELLOW}[*] 最终入选 IPv${mode} 列表：${PLAIN}"
+  jq -r '.result[] | "- " + .ip + " | score_ms=" + ((.score_ms // 0)|tostring) + " | download_mbps=" + ((.download_mbps // 0)|tostring) + " | colo=" + ((.colo // "-")|tostring)' "$final_ips"
 
   EXISTING_RECORDS=$(cf_api GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?type=$dns_type&name=$CF_DOMAIN")
   cf_api_check "$EXISTING_RECORDS"
