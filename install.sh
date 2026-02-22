@@ -15,6 +15,8 @@ PROJECT_DIR="/opt/montecarlo-ip-searcher"
 TMP_ASSETS_DIR="/tmp/cfipup2dns-assets"
 RAW_BASE="https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
 RAW_BASE_PROXY="https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
+UPSTREAM_REPO="https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
+UPSTREAM_REPO_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
 
 mkdir -p "$TMP_ASSETS_DIR" "$PROJECT_DIR"
 
@@ -33,7 +35,7 @@ download_mcis_release() {
     aarch64|arm64) rel_arch="arm64" ;;
     *)
       echo -e "${RED}[!] 不支持的架构: $arch（当前仅支持 amd64/arm64）${PLAIN}"
-      exit 1
+      return 1
       ;;
   esac
 
@@ -50,11 +52,62 @@ download_mcis_release() {
 
   if [[ ! -x "$PROJECT_DIR/mcis" ]]; then
     echo -e "${RED}[!] mcis 解压后不可执行${PLAIN}"
-    exit 1
+    return 1
   fi
 
   mv -f "$PROJECT_DIR/mcis" "$PROJECT_DIR/montecarlo-ip-searcher"
   chmod +x "$PROJECT_DIR/montecarlo-ip-searcher"
+}
+
+install_go() {
+  local GO_VERSION="1.25.5"
+  local GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+  if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
+    rm -rf /usr/local/go
+    wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm -f /tmp/go.tar.gz
+  fi
+  export PATH="/usr/local/go/bin:$PATH"
+  export GOTOOLCHAIN=local
+  go env -w GOPROXY=https://goproxy.cn,direct || true
+}
+
+build_mcis_from_source() {
+  echo -e "${YELLOW}[*] 预编译二进制与系统 glibc 不兼容，切换源码编译...${PLAIN}"
+  install_go
+
+  if [[ -d "$PROJECT_DIR/.git" ]]; then
+    git -C "$PROJECT_DIR" fetch --all --tags
+    git -C "$PROJECT_DIR" reset --hard origin/main
+  else
+    rm -rf "$PROJECT_DIR"
+    git clone "$UPSTREAM_REPO" "$PROJECT_DIR" || git clone "$UPSTREAM_REPO_PROXY" "$PROJECT_DIR"
+  fi
+
+  cd "$PROJECT_DIR"
+  GOTOOLCHAIN=local go mod tidy
+  if ! GOTOOLCHAIN=local go build -o montecarlo-ip-searcher ./cmd/mcis; then
+    local MAIN_FILE
+    MAIN_FILE=$(find . -name main.go -print0 | xargs -0 grep -l "package main" | head -n 1)
+    [[ -z "$MAIN_FILE" ]] && { echo -e "${RED}[!] 构建失败：未找到 main.go${PLAIN}"; return 1; }
+    GOTOOLCHAIN=local go build -o montecarlo-ip-searcher "$(dirname "$MAIN_FILE")"
+  fi
+  chmod +x "$PROJECT_DIR/montecarlo-ip-searcher"
+}
+
+binary_self_check() {
+  set +e
+  "$PROJECT_DIR/montecarlo-ip-searcher" --help >/tmp/mcis-selfcheck.log 2>&1
+  local code=$?
+  set -e
+  if [[ $code -eq 0 ]]; then
+    return 0
+  fi
+  if grep -q "GLIBC_" /tmp/mcis-selfcheck.log; then
+    return 2
+  fi
+  return 1
 }
 
 write_config() {
@@ -81,8 +134,22 @@ fetch_asset cfip.sh
 fetch_asset menu.sh
 chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
 
-echo -e "${GREEN}[*] 3/6 安装 mcis（使用预编译二进制，无需本机 Go）...${PLAIN}"
-download_mcis_release
+echo -e "${GREEN}[*] 3/6 安装 mcis...${PLAIN}"
+if download_mcis_release; then
+  if binary_self_check; then
+    echo -e "${GREEN}[+] 预编译 mcis 可用${PLAIN}"
+  else
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+      build_mcis_from_source
+    else
+      echo -e "${YELLOW}[!] 预编译 mcis 自检失败，自动切源码编译${PLAIN}"
+      build_mcis_from_source
+    fi
+  fi
+else
+  build_mcis_from_source
+fi
 
 echo -e "${GREEN}[*] 4/6 确认 CIDR 文件...${PLAIN}"
 [[ -s "$PROJECT_DIR/ipv4cidr.txt" ]] || {
