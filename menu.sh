@@ -5,6 +5,30 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="/opt/montecarlo-ip-searcher"
 CONFIG_FILE="$PROJECT_DIR/config.json"
 
+# 当通过 curl | bash 运行时，$0 不是仓库文件路径，需临时拉取仓库脚本
+ensure_repo_scripts() {
+  if [[ -f "$REPO_DIR/install.sh" && -f "$REPO_DIR/uninstall.sh" ]]; then
+    return 0
+  fi
+
+  local tmp_dir="/tmp/cfipup2dns-menu"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  echo -e "${YELLOW}[*] 检测到非仓库环境，正在临时获取脚本...${PLAIN}"
+  if command -v git >/dev/null 2>&1; then
+    git clone --depth=1 https://github.com/coldboy404/cfipup2dns.git "$tmp_dir" \
+      || git clone --depth=1 https://gh-proxy.com/https://github.com/coldboy404/cfipup2dns.git "$tmp_dir"
+  else
+    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp_dir/install.sh"
+    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp_dir/uninstall.sh"
+    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/cfip.sh -o "$tmp_dir/cfip.sh"
+    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh -o "$tmp_dir/menu.sh"
+  fi
+
+  REPO_DIR="$tmp_dir"
+}
+
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
@@ -121,6 +145,7 @@ check_status() {
 }
 
 need_root
+ensure_repo_scripts
 
 while true; do
   show_header
