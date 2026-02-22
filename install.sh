@@ -58,14 +58,23 @@ fetch_asset cfip.sh
 fetch_asset menu.sh
 chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
 
-echo -e "${GREEN}[*] 3/7 安装 Go（若缺失）...${PLAIN}"
-export PATH="$PATH:/usr/local/go/bin"
-if ! command -v go >/dev/null 2>&1; then
-  GO_TARBALL="go1.25.1.linux-amd64.tar.gz"
+echo -e "${GREEN}[*] 3/7 安装 Go（固定 1.25.5）...${PLAIN}"
+GO_VERSION="1.25.5"
+GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+
+# 始终确保 /usr/local/go 与 go.mod 要求版本一致，避免 GOTOOLCHAIN 自动下载损坏
+if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
+  rm -rf /usr/local/go
   wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz
   tar -C /usr/local -xzf /tmp/go.tar.gz
   rm -f /tmp/go.tar.gz
 fi
+
+export PATH="/usr/local/go/bin:$PATH"
+export GOTOOLCHAIN=local
+
+# 清理可能损坏的自动下载 toolchain 缓存（避免出现 package ... is not in std）
+rm -rf /root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.linux-amd64 2>/dev/null || true
 
 go env -w GOPROXY=https://goproxy.cn,direct || true
 go version || true
@@ -81,11 +90,11 @@ else
 fi
 
 cd "$PROJECT_DIR"
-go mod tidy
-if ! go build -o montecarlo-ip-searcher ./cmd/mcis; then
+GOTOOLCHAIN=local go mod tidy
+if ! GOTOOLCHAIN=local go build -o montecarlo-ip-searcher ./cmd/mcis; then
   MAIN_FILE=$(find . -name main.go -print0 | xargs -0 grep -l "package main" | head -n 1)
   [[ -z "$MAIN_FILE" ]] && { echo -e "${RED}[!] 构建失败：未找到 main.go${PLAIN}"; exit 1; }
-  go build -o montecarlo-ip-searcher "$(dirname "$MAIN_FILE")"
+  GOTOOLCHAIN=local go build -o montecarlo-ip-searcher "$(dirname "$MAIN_FILE")"
 fi
 chmod +x montecarlo-ip-searcher
 
