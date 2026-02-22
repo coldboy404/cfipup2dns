@@ -161,6 +161,7 @@ run_one_mode() {
   echo -e "${GREEN}   IPv${mode} 优选开始：目标最快速度 (Top ${TOP_N})   ${PLAIN}"
   echo -e "${GREEN}==============================================${PLAIN}"
   echo -e "${YELLOW}[*] 模式: IPv${mode} | CIDR: $(basename "$cidr_file")${PLAIN}"
+  echo -e "${YELLOW}[*] 参数: budget=${BUDGET:-默认} top_test=${TOP_TEST} download_top=${DOWNLOAD_TOP} rounds=${ROUNDS:-默认} timeout=${TIMEOUT:-默认}${PLAIN}"
 
   search_top="$TOP_TEST"
   if [ "$TOP_N" -gt "$search_top" ]; then search_top="$TOP_N"; fi
