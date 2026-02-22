@@ -135,8 +135,10 @@ check_status() {
 
 run_uninstall() {
   local tmp="/tmp/cfipup2dns-uninstall.sh"
-  curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp" \
-    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp"
+  local ts
+  ts="$(date +%s)"
+  curl -fsSL "https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh?t=${ts}" -o "$tmp" \
+    || curl -fsSL "https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh?t=${ts}" -o "$tmp"
   chmod +x "$tmp"
   bash "$tmp"
 }
