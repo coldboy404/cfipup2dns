@@ -34,6 +34,20 @@ run_install() {
     || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp"
   chmod +x "$tmp"
   bash "$tmp"
+
+  echo
+  if [[ -f "$CONFIG_FILE" ]]; then
+    echo -e "${GREEN}[+] 检测到配置文件已存在：$CONFIG_FILE${PLAIN}"
+  else
+    echo -e "${YELLOW}[!] 当前还没有配置文件。${PLAIN}"
+    read -rp "现在开始填写 Cloudflare 配置？(Y/n): " ans
+    ans=${ans:-Y}
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      edit_config || true
+    else
+      echo -e "${YELLOW}[*] 已跳过。你可以稍后在菜单里选“2) 修改 Cloudflare 配置”。${PLAIN}"
+    fi
+  fi
 }
 
 edit_config() {
@@ -82,6 +96,17 @@ EOF
 
 run_once() {
   local mode topn
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo -e "${YELLOW}[!] 未找到配置文件：$CONFIG_FILE${PLAIN}"
+    read -rp "是否先进入配置填写？(Y/n): " ans
+    ans=${ans:-Y}
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      edit_config || return 1
+    else
+      return 0
+    fi
+  fi
+
   echo -e "${YELLOW}[*] 运行一次优选${PLAIN}"
   read -rp "模式 (4/6/both) [both]: " mode
   read -rp "每种写入数量 TOP_N [5]: " topn
@@ -94,7 +119,7 @@ show_logs() {
   if [[ -f "$PROJECT_DIR/cron.log" ]]; then
     tail -n 80 "$PROJECT_DIR/cron.log"
   else
-    echo -e "${YELLOW}[!] 还没有 cron.log${PLAIN}"
+    echo -e "${YELLOW}[!] 还没有日志${PLAIN}"
   fi
 }
 

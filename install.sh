@@ -34,6 +34,21 @@ fetch_asset() {
     || curl -fsSL "$RAW_BASE_PROXY/$name" -o "$dst"
 }
 
+write_config() {
+  local cfg="$1" token="$2" zone="$3" domain="$4" ttl="$5" proxied="$6"
+  cat > "$cfg" <<EOF
+{
+  "cloudflare": {
+    "token": "$token",
+    "zone_id": "$zone",
+    "domain": "$domain",
+    "ttl": $ttl,
+    "proxied": $proxied
+  }
+}
+EOF
+}
+
 echo -e "${GREEN}[*] 1/7 安装基础依赖...${PLAIN}"
 apt-get update
 apt-get install -y jq wget git curl ca-certificates
@@ -81,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/
 curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o ipv6cidr.txt \
   || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o ipv6cidr.txt
 
-echo -e "${GREEN}[*] 6/7 写入配置（保留旧值）...${PLAIN}"
+echo -e "${GREEN}[*] 6/7 处理配置...${PLAIN}"
 CONFIG_FILE="$PROJECT_DIR/config.json"
 OLD_TOKEN=""; OLD_ZONE=""; OLD_DOMAIN=""; OLD_TTL="60"; OLD_PROXIED="false"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -98,28 +113,13 @@ CF_DOMAIN="${CF_DOMAIN:-$OLD_DOMAIN}"
 CF_TTL="${CF_TTL:-$OLD_TTL}"
 CF_PROXIED="${CF_PROXIED:-$OLD_PROXIED}"
 
-if [[ -z "$CF_KEY" || -z "$CF_ZONE" || -z "$CF_DOMAIN" ]]; then
-  echo "请输入 Cloudflare 信息："
-  read -rp "API Token: " CF_KEY
-  read -rp "Zone ID: " CF_ZONE
-  read -rp "域名(如 cf.example.com): " CF_DOMAIN
-  read -rp "TTL [60]: " _ttl
-  read -rp "proxied(true/false) [false]: " _proxied
-  CF_TTL="${_ttl:-60}"
-  CF_PROXIED="${_proxied:-false}"
+if [[ -n "$CF_KEY" && -n "$CF_ZONE" && -n "$CF_DOMAIN" ]]; then
+  write_config "$CONFIG_FILE" "$CF_KEY" "$CF_ZONE" "$CF_DOMAIN" "$CF_TTL" "$CF_PROXIED"
+  echo -e "${GREEN}[+] 已写入配置: $CONFIG_FILE${PLAIN}"
+else
+  echo -e "${YELLOW}[!] 未检测到完整 Cloudflare 配置，已跳过配置写入。${PLAIN}"
+  echo -e "${YELLOW}    可在菜单中选择“2) 修改 Cloudflare 配置”后再运行。${PLAIN}"
 fi
-
-cat > "$CONFIG_FILE" <<EOF
-{
-  "cloudflare": {
-    "token": "$CF_KEY",
-    "zone_id": "$CF_ZONE",
-    "domain": "$CF_DOMAIN",
-    "ttl": $CF_TTL,
-    "proxied": $CF_PROXIED
-  }
-}
-EOF
 
 echo -e "${GREEN}[*] 7/7 安装命令与定时任务...${PLAIN}"
 install -m 755 "$TMP_ASSETS_DIR/cfip.sh" /usr/local/bin/cfip-run
