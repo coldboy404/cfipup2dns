@@ -24,7 +24,6 @@ show_header() {
   echo -e "${CYAN}===============================================${PLAIN}"
   echo -e "${CYAN}        cfipup2dns 一键部署管理菜单${PLAIN}"
   echo -e "${CYAN}===============================================${PLAIN}"
-  echo "项目目录: $PROJECT_DIR"
   echo
 }
 
@@ -35,17 +34,6 @@ run_install() {
     || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp"
   chmod +x "$tmp"
   bash "$tmp"
-}
-
-quick_deploy() {
-  echo -e "${YELLOW}[*] 执行快速部署：安装/更新 -> 配置 -> 首次运行${PLAIN}"
-  run_install
-  echo
-  read -rp "是否立即执行一次优选？(Y/n): " ans
-  ans=${ans:-Y}
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    /usr/local/bin/cfip-run || true
-  fi
 }
 
 edit_config() {
@@ -113,43 +101,42 @@ show_logs() {
 check_status() {
   echo -e "${YELLOW}[*] 快速状态${PLAIN}"
   command -v /usr/local/bin/cfip-run >/dev/null 2>&1 && echo "cfip-run: 已安装" || echo "cfip-run: 未安装"
-  command -v /usr/local/bin/cfip >/dev/null 2>&1 && echo "cfip(menu): 已安装" || echo "cfip(menu): 未安装"
+  command -v /usr/local/bin/cfip >/dev/null 2>&1 && echo "cfip: 已安装" || echo "cfip: 未安装"
   [[ -x "$PROJECT_DIR/montecarlo-ip-searcher" ]] && echo "mcis: 已安装" || echo "mcis: 未安装"
   [[ -f "$CONFIG_FILE" ]] && echo "config: 已配置" || echo "config: 未配置"
   echo
   crontab -l 2>/dev/null | grep cfip-run || echo "crontab: 未发现 cfip-run 定时任务"
 }
 
+run_uninstall() {
+  local tmp="/tmp/cfipup2dns-uninstall.sh"
+  curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp" \
+    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp"
+  chmod +x "$tmp"
+  bash "$tmp"
+}
+
 need_root
 
 while true; do
   show_header
-  echo "1) 快速部署（安装/更新 + 配置 + 首次运行）"
-  echo "2) 安装 / 更新"
-  echo "3) 修改 Cloudflare 配置"
-  echo "4) 立即运行一次优选"
-  echo "5) 查看日志（cron.log）"
-  echo "6) 查看状态（安装/配置/定时任务）"
-  echo "7) 卸载"
+  echo "1) 安装 / 更新"
+  echo "2) 修改 Cloudflare 配置"
+  echo "3) 立即运行一次优选"
+  echo "4) 查看日志"
+  echo "5) 查看状态"
+  echo "6) 卸载"
   echo "0) 退出"
   echo
   read -rp "请选择: " choice
   echo
   case "$choice" in
-    1) quick_deploy; pause ;;
-    2) run_install; pause ;;
-    3) edit_config; pause ;;
-    4) run_once; pause ;;
-    5) show_logs; pause ;;
-    6) check_status; pause ;;
-    7)
-      tmp="/tmp/cfipup2dns-uninstall.sh"
-      curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp" \
-        || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp"
-      chmod +x "$tmp"
-      bash "$tmp"
-      pause
-      ;;
+    1) run_install; pause ;;
+    2) edit_config; pause ;;
+    3) run_once; pause ;;
+    4) show_logs; pause ;;
+    5) check_status; pause ;;
+    6) run_uninstall; pause ;;
     0) echo "已退出。"; exit 0 ;;
     *) echo -e "${RED}[!] 无效选项${PLAIN}"; pause ;;
   esac
