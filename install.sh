@@ -72,6 +72,27 @@ install_prereqs() {
   fi
 }
 
+version_ge() {
+  # version_ge 2.34 2.32 => true
+  [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+}
+
+should_try_prebuilt() {
+  local mode glibc_ver
+  mode="${MCIS_INSTALL_MODE:-auto}"  # auto|prebuilt|source
+  case "$mode" in
+    prebuilt) return 0 ;;
+    source) return 1 ;;
+  esac
+
+  glibc_ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+  if [[ -n "$glibc_ver" ]] && ! version_ge "$glibc_ver" "2.32"; then
+    echo -e "${YELLOW}[*] 检测到 glibc ${glibc_ver} < 2.32，跳过预编译包，直接源码编译${PLAIN}"
+    return 1
+  fi
+  return 0
+}
+
 download_mcis_release() {
   local tag url url_proxy tgz
   tag="${MCIS_TAG:-v0.2.3}"
@@ -80,9 +101,9 @@ download_mcis_release() {
   url_proxy="https://gh-proxy.com/${url}"
 
   echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${MCIS_ARCH})${PLAIN}"
-  # 防止网络卡死：单链接超时后自动切换备用源，仍失败则回退源码编译
-  curl -fL --connect-timeout 8 --max-time 120 --retry 2 "$url" -o "$tgz" \
-    || curl -fL --connect-timeout 8 --max-time 120 --retry 2 "$url_proxy" -o "$tgz"
+  # 防止网络卡死：超时后切换备用源，仍失败则回退源码编译
+  curl -fL --connect-timeout 6 --max-time 45 --retry 1 "$url" -o "$tgz" \
+    || curl -fL --connect-timeout 6 --max-time 45 --retry 1 "$url_proxy" -o "$tgz"
 
   tar -xzf "$tgz" -C "$PROJECT_DIR"
   rm -f "$tgz"
@@ -193,7 +214,7 @@ fetch_asset menu.sh
 chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
 
 echo -e "${GREEN}[*] 3/6 安装 mcis...${PLAIN}"
-if download_mcis_release; then
+if should_try_prebuilt && download_mcis_release; then
   if binary_self_check; then
     echo -e "${GREEN}[+] 预编译 mcis 可用${PLAIN}"
   else
@@ -206,7 +227,7 @@ if download_mcis_release; then
     fi
   fi
 else
-  echo -e "${YELLOW}[!] 预编译下载失败或超时，自动切源码编译（可能更慢但更稳）${PLAIN}"
+  echo -e "${YELLOW}[!] 已跳过/失败预编译安装，自动切源码编译（更稳）${PLAIN}"
   build_mcis_from_source
 fi
 
