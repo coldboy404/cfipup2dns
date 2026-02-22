@@ -27,9 +27,22 @@ fi
 
 # 1. 停止进程
 echo -e "${YELLOW}[*] 1. 正在停止进程...${PLAIN}"
-# 只杀扫描器与 cfip-run，避免误杀当前菜单进程（cfip）导致终端出现 Terminated
-pkill -f '/opt/montecarlo-ip-searcher/montecarlo-ip-searcher' 2>/dev/null || true
-pkill -f '/usr/local/bin/cfip-run' 2>/dev/null || true
+# 注意：通过 curl|bash 执行时，当前 bash 的命令行可能包含 "cfip-run" 字符串。
+# 不能直接 pkill -f，否则会误杀当前卸载脚本自身。
+kill_by_pattern_safe() {
+    local pattern="$1"
+    pgrep -f "$pattern" 2>/dev/null | while read -r pid; do
+        [ -z "$pid" ] && continue
+        # 跳过当前 shell / 父进程，避免自杀
+        if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || [ "$pid" = "$BASHPID" ]; then
+            continue
+        fi
+        kill "$pid" 2>/dev/null || true
+    done
+}
+
+kill_by_pattern_safe '/opt/montecarlo-ip-searcher/montecarlo-ip-searcher'
+kill_by_pattern_safe '/usr/local/bin/cfip-run'
 
 # 2. 清理定时任务
 echo -e "${YELLOW}[*] 2. 正在清理 Crontab 定时任务...${PLAIN}"
