@@ -15,6 +15,12 @@
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh)"
 ```
 
+如果你机器访问 GitHub 慢，可用代理地址：
+
+```bash
+bash -c "$(curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh)"
+```
+
 > 说明：该命令会拉起交互式菜单，一路选择即可完成安装、配置、运行、查看日志、卸载。
 
 ---
