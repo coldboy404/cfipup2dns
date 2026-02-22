@@ -35,10 +35,14 @@ bash -c "$(curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/col
 
 ## 默认行为
 
-`cfip-run` 默认执行双栈优选：
+`cfip-run` 默认执行双栈优选（5 个 IPv4 + 5 个 IPv6）。
 
-- IPv4：写入 5 条 A 记录
-- IPv6：写入 5 条 AAAA 记录
+默认参数（可用环境变量覆盖）：
+- `BUDGET=3000`
+- `ROUNDS=4`
+- `TIMEOUT=3s`
+- `TOP_TEST=50`
+- `DOWNLOAD_TOP=20`
 
 等价于：
 
@@ -84,24 +88,18 @@ cfip
 ```bash
 IP_MODE=both   # 4 / 6 / both
 TOP_N=5        # 每个模式写入数量
-TOP_TEST=20
+TOP_TEST=50
 CONCURRENCY=200
 BUDGET=3000
 TIMEOUT=3s
-HEADS=4
 
-DOWNLOAD_TOP=5
+DOWNLOAD_TOP=20
 DOWNLOAD_BYTES=50000000
 DOWNLOAD_TIMEOUT=45s
 DOWNLOAD_URL=https://example.com/large.bin
 
-ROUNDS=6
+ROUNDS=4
 SKIP_FIRST=1
-
-COLO_ALLOW=HKG,SJC
-COLO_EXCLUDE=LAX,DFW
-
-MCIS_EXTRA_ARGS="-v"
 ```
 
 示例：
