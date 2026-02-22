@@ -17,6 +17,8 @@ RAW_BASE="https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
 RAW_BASE_PROXY="https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
 UPSTREAM_REPO="https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
 UPSTREAM_REPO_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
+CONFIG_FILE="$PROJECT_DIR/config.json"
+CONFIG_BAK="/tmp/cfipup2dns-config.backup.json"
 
 mkdir -p "$TMP_ASSETS_DIR" "$PROJECT_DIR"
 
@@ -173,6 +175,11 @@ setup_cron() {
   rm -f "$CRON_TMP"
 }
 
+# 更新时先备份旧配置，避免目录刷新导致丢失
+if [[ -f "$CONFIG_FILE" ]]; then
+  cp -f "$CONFIG_FILE" "$CONFIG_BAK" || true
+fi
+
 detect_arch
 
 echo -e "${GREEN}[*] 1/6 安装基础依赖（跨发行版）...${PLAIN}"
@@ -211,7 +218,11 @@ echo -e "${GREEN}[*] 4/6 确认 CIDR 文件...${PLAIN}"
 }
 
 echo -e "${GREEN}[*] 5/6 处理配置...${PLAIN}"
-CONFIG_FILE="$PROJECT_DIR/config.json"
+# 优先使用当前配置，其次使用更新前备份配置
+if [[ ! -f "$CONFIG_FILE" && -f "$CONFIG_BAK" ]]; then
+  cp -f "$CONFIG_BAK" "$CONFIG_FILE" || true
+fi
+
 OLD_TOKEN=""; OLD_ZONE=""; OLD_DOMAIN=""; OLD_TTL="60"; OLD_PROXIED="false"
 if [[ -f "$CONFIG_FILE" ]]; then
   OLD_TOKEN=$(jq -r '.cloudflare.token // ""' "$CONFIG_FILE" 2>/dev/null || true)
@@ -229,7 +240,8 @@ CF_PROXIED="${CF_PROXIED:-$OLD_PROXIED}"
 
 if [[ -n "$CF_KEY" && -n "$CF_ZONE" && -n "$CF_DOMAIN" ]]; then
   write_config "$CONFIG_FILE" "$CF_KEY" "$CF_ZONE" "$CF_DOMAIN" "$CF_TTL" "$CF_PROXIED"
-  echo -e "${GREEN}[+] 已写入配置: $CONFIG_FILE${PLAIN}"
+  rm -f "$CONFIG_BAK" 2>/dev/null || true
+  echo -e "${GREEN}[+] 已保留/写入配置: $CONFIG_FILE${PLAIN}"
 else
   echo -e "${YELLOW}[!] 未检测到完整 Cloudflare 配置，已跳过配置写入。${PLAIN}"
   echo -e "${YELLOW}    可在菜单中选择“2) 修改 Cloudflare 配置”后再运行。${PLAIN}"
