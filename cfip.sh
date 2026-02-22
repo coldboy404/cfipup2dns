@@ -171,6 +171,7 @@ run_one_mode() {
     -concurrency "$CONCURRENCY"
     -top "$search_top"
     -out jsonl
+    -v
   )
 
   [ -n "$BUDGET" ] && MCIS_ARGS+=( -budget "$BUDGET" )
