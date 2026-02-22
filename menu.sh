@@ -1,33 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="/opt/montecarlo-ip-searcher"
 CONFIG_FILE="$PROJECT_DIR/config.json"
-
-# 当通过 curl | bash 运行时，$0 不是仓库文件路径，需临时拉取仓库脚本
-ensure_repo_scripts() {
-  if [[ -f "$REPO_DIR/install.sh" && -f "$REPO_DIR/uninstall.sh" ]]; then
-    return 0
-  fi
-
-  local tmp_dir="/tmp/cfipup2dns-menu"
-  rm -rf "$tmp_dir"
-  mkdir -p "$tmp_dir"
-
-  echo -e "${YELLOW}[*] 检测到非仓库环境，正在临时获取脚本...${PLAIN}"
-  if command -v git >/dev/null 2>&1; then
-    git clone --depth=1 https://github.com/coldboy404/cfipup2dns.git "$tmp_dir" \
-      || git clone --depth=1 https://gh-proxy.com/https://github.com/coldboy404/cfipup2dns.git "$tmp_dir"
-  else
-    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp_dir/install.sh"
-    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp_dir/uninstall.sh"
-    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/cfip.sh -o "$tmp_dir/cfip.sh"
-    curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh -o "$tmp_dir/menu.sh"
-  fi
-
-  REPO_DIR="$tmp_dir"
-}
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -42,33 +17,35 @@ need_root() {
   fi
 }
 
-pause() {
-  read -rp "按回车继续..." _
-}
+pause() { read -rp "按回车继续..." _; }
 
 show_header() {
   clear || true
   echo -e "${CYAN}===============================================${PLAIN}"
   echo -e "${CYAN}        cfipup2dns 一键部署管理菜单${PLAIN}"
   echo -e "${CYAN}===============================================${PLAIN}"
-  echo "仓库目录: $REPO_DIR"
   echo "项目目录: $PROJECT_DIR"
   echo
 }
 
+run_install() {
+  local tmp="/tmp/cfipup2dns-install.sh"
+  echo -e "${YELLOW}[*] 正在获取最新版安装脚本...${PLAIN}"
+  curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp" \
+    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o "$tmp"
+  chmod +x "$tmp"
+  bash "$tmp"
+}
+
 quick_deploy() {
   echo -e "${YELLOW}[*] 执行快速部署：安装/更新 -> 配置 -> 首次运行${PLAIN}"
-  bash "$REPO_DIR/install.sh"
+  run_install
   echo
   read -rp "是否立即执行一次优选？(Y/n): " ans
   ans=${ans:-Y}
   if [[ "$ans" =~ ^[Yy]$ ]]; then
     /usr/local/bin/cfip-run || true
   fi
-}
-
-install_or_update() {
-  bash "$REPO_DIR/install.sh"
 }
 
 edit_config() {
@@ -84,7 +61,7 @@ edit_config() {
   fi
 
   echo -e "${YELLOW}[*] 修改 Cloudflare 配置${PLAIN}"
-  read -rp "API Token [已隐藏，留空保持不变]: " new_token
+  read -rp "API Token [留空保持不变]: " new_token
   read -rp "Zone ID [$zone_id]: " new_zone
   read -rp "域名 (如 cf.example.com) [$domain]: " new_domain
   read -rp "TTL [$ttl]: " new_ttl
@@ -112,7 +89,6 @@ edit_config() {
   }
 }
 EOF
-
   echo -e "${GREEN}[+] 配置已保存：$CONFIG_FILE${PLAIN}"
 }
 
@@ -139,13 +115,12 @@ check_status() {
   command -v /usr/local/bin/cfip-run >/dev/null 2>&1 && echo "cfip-run: 已安装" || echo "cfip-run: 未安装"
   command -v /usr/local/bin/cfip >/dev/null 2>&1 && echo "cfip(menu): 已安装" || echo "cfip(menu): 未安装"
   [[ -x "$PROJECT_DIR/montecarlo-ip-searcher" ]] && echo "mcis: 已安装" || echo "mcis: 未安装"
-  [[ -f "$CONFIG_FILE" ]] && echo "config: $CONFIG_FILE" || echo "config: 未配置"
+  [[ -f "$CONFIG_FILE" ]] && echo "config: 已配置" || echo "config: 未配置"
   echo
-  crontab -l 2>/dev/null | grep cfip || echo "crontab: 未发现 cfip 定时任务"
+  crontab -l 2>/dev/null | grep cfip-run || echo "crontab: 未发现 cfip-run 定时任务"
 }
 
 need_root
-ensure_repo_scripts
 
 while true; do
   show_header
@@ -162,12 +137,19 @@ while true; do
   echo
   case "$choice" in
     1) quick_deploy; pause ;;
-    2) install_or_update; pause ;;
+    2) run_install; pause ;;
     3) edit_config; pause ;;
     4) run_once; pause ;;
     5) show_logs; pause ;;
     6) check_status; pause ;;
-    7) bash "$REPO_DIR/uninstall.sh"; pause ;;
+    7)
+      tmp="/tmp/cfipup2dns-uninstall.sh"
+      curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp" \
+        || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/uninstall.sh -o "$tmp"
+      chmod +x "$tmp"
+      bash "$tmp"
+      pause
+      ;;
     0) echo "已退出。"; exit 0 ;;
     *) echo -e "${RED}[!] 无效选项${PLAIN}"; pause ;;
   esac
