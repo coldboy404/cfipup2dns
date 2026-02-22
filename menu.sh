@@ -95,7 +95,7 @@ EOF
 }
 
 run_once() {
-  local mode topn speed
+  local mode topn
   if [[ ! -f "$CONFIG_FILE" ]]; then
     echo -e "${YELLOW}[!] 未找到配置文件：$CONFIG_FILE${PLAIN}"
     read -rp "是否先进入配置填写？(Y/n): " ans
@@ -107,20 +107,12 @@ run_once() {
     fi
   fi
 
-  echo -e "${YELLOW}[*] 运行一次优选${PLAIN}"
+  echo -e "${YELLOW}[*] 运行一次优选（使用原作者默认参数）${PLAIN}"
   read -rp "模式 (4/6/both) [both]: " mode
   read -rp "每种写入数量 TOP_N [5]: " topn
-  read -rp "速度模式 1) 极速(推荐) 2) 标准 [1]: " speed
   mode=${mode:-both}
   topn=${topn:-5}
-  speed=${speed:-1}
-
-  if [[ "$speed" == "2" ]]; then
-    IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip-run
-  else
-    # 极速模式：减少探测与下载测速规模，显著缩短时间（不限制总时长）
-    IP_MODE="$mode" TOP_N="$topn" TOP_TEST=20 DOWNLOAD_TOP=8 BUDGET=1200 CONCURRENCY=120 ROUNDS=3 SKIP_FIRST=1 TIMEOUT=2s MAX_SCAN_SECONDS=0 /usr/local/bin/cfip-run
-  fi
+  IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip-run
 }
 
 show_logs() {
