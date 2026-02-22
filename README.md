@@ -36,6 +36,19 @@ nano /opt/montecarlo-ip-searcher/config.json
 
 ---
 
+## 默认行为（已改）
+
+`cfip` 默认会执行 **双栈更新**：
+- **IPv4：筛选并写入 5 个 A 记录**
+- **IPv6：筛选并写入 5 个 AAAA 记录**
+
+也就是默认相当于：
+```bash
+IP_MODE=both TOP_N=5 cfip
+```
+
+---
+
 ## 使用
 
 手动运行：
@@ -61,7 +74,7 @@ tail -f /opt/montecarlo-ip-searcher/cron.log
 - 多轮测速稳定化：`ROUNDS` + `SKIP_FIRST`
 - 机房过滤：`COLO_ALLOW` / `COLO_EXCLUDE`
 - 自定义测速文件：`DOWNLOAD_URL`
-- IPv4 / IPv6 模式切换：`IP_MODE=4|6`（自动更新 A / AAAA）
+- IPv4 / IPv6 / 双栈模式切换：`IP_MODE=4|6|both`
 - 支持 Cloudflare `ttl` / `proxied`
 
 ---
@@ -69,9 +82,12 @@ tail -f /opt/montecarlo-ip-searcher/cron.log
 ## 常用参数（环境变量覆盖）
 
 ```bash
-# 基础
-TOP_N=5
+# 模式（默认 both）
+IP_MODE=both   # 4 / 6 / both
+TOP_N=5        # 每个模式写入数量（默认每种 5 个）
 TOP_TEST=50
+
+# 搜索参数
 CONCURRENCY=50
 BUDGET=3000
 TIMEOUT=3s
@@ -91,9 +107,6 @@ SKIP_FIRST=1
 COLO_ALLOW=HKG,SJC
 COLO_EXCLUDE=LAX,DFW
 
-# 模式
-IP_MODE=4   # 4 或 6
-
 # 透传给 mcis 的其它参数
 MCIS_EXTRA_ARGS="-v"
 ```
@@ -101,8 +114,17 @@ MCIS_EXTRA_ARGS="-v"
 示例：
 
 ```bash
-# IPv6 + 多轮 + 限定机房
-IP_MODE=6 ROUNDS=6 SKIP_FIRST=1 COLO_ALLOW=HKG,SIN TOP_N=3 cfip
+# 默认：同时更新 IPv4(5) + IPv6(5)
+cfip
+
+# 仅 IPv4，写 3 个 A 记录
+IP_MODE=4 TOP_N=3 cfip
+
+# 仅 IPv6，写 3 个 AAAA 记录
+IP_MODE=6 TOP_N=3 cfip
+
+# 双栈 + 多轮 + 限定机房
+IP_MODE=both ROUNDS=6 SKIP_FIRST=1 COLO_ALLOW=HKG,SIN TOP_N=5 cfip
 
 # 用自定义大文件测速
 DOWNLOAD_URL=https://your-domain.com/large.bin DOWNLOAD_TOP=20 cfip
