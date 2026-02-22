@@ -24,6 +24,7 @@ DOWNLOAD_URL="${DOWNLOAD_URL:-}"
 CONCURRENCY="${CONCURRENCY:-50}"
 TOP_TEST="${TOP_TEST:-50}"
 TOP_N="${TOP_N:-5}"                      # 每个模式写入的 IP 数量（默认每种 5 个）
+MAX_SCAN_SECONDS="${MAX_SCAN_SECONDS:-120}" # 单次模式扫描最长时长（秒）
 MCIS_EXTRA_ARGS="${MCIS_EXTRA_ARGS:-}"
 
 # DNS 行为（可通过 config.json 或环境变量控制）
@@ -161,7 +162,7 @@ run_one_mode() {
   echo -e "${GREEN}   IPv${mode} 优选开始：目标最快速度 (Top ${TOP_N})   ${PLAIN}"
   echo -e "${GREEN}==============================================${PLAIN}"
   echo -e "${YELLOW}[*] 模式: IPv${mode} | CIDR: $(basename "$cidr_file")${PLAIN}"
-  echo -e "${YELLOW}[*] 参数: budget=${BUDGET:-默认} top_test=${TOP_TEST} download_top=${DOWNLOAD_TOP} rounds=${ROUNDS:-默认} timeout=${TIMEOUT:-默认}${PLAIN}"
+  echo -e "${YELLOW}[*] 参数: budget=${BUDGET:-默认} top_test=${TOP_TEST} download_top=${DOWNLOAD_TOP} rounds=${ROUNDS:-默认} timeout=${TIMEOUT:-默认} max_scan_seconds=${MAX_SCAN_SECONDS}${PLAIN}"
 
   search_top="$TOP_TEST"
   if [ "$TOP_N" -gt "$search_top" ]; then search_top="$TOP_N"; fi
@@ -192,14 +193,23 @@ run_one_mode() {
   EXTRA_ARGS=( $MCIS_EXTRA_ARGS )
 
   set +e
-  "$PROJECT_DIR/montecarlo-ip-searcher" "${MCIS_ARGS[@]}" "${EXTRA_ARGS[@]}" > "$result_file" 2>&1
-  mcis_code=$?
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=INT "${MAX_SCAN_SECONDS}s" "$PROJECT_DIR/montecarlo-ip-searcher" "${MCIS_ARGS[@]}" "${EXTRA_ARGS[@]}" > "$result_file" 2>&1
+    mcis_code=$?
+  else
+    "$PROJECT_DIR/montecarlo-ip-searcher" "${MCIS_ARGS[@]}" "${EXTRA_ARGS[@]}" > "$result_file" 2>&1
+    mcis_code=$?
+  fi
   set -e
 
-  if [ "$mcis_code" -ne 0 ]; then
+  if [ "$mcis_code" -ne 0 ] && [ "$mcis_code" -ne 124 ] && [ "$mcis_code" -ne 130 ]; then
     echo -e "${RED}[!] mcis 执行失败（退出码: ${mcis_code}）${PLAIN}"
     tail -n 40 "$result_file" 2>/dev/null || true
     return 1
+  fi
+
+  if [ "$mcis_code" = "124" ] || [ "$mcis_code" = "130" ]; then
+    echo -e "${YELLOW}[*] 扫描已达时间上限（${MAX_SCAN_SECONDS}s），使用当前已产出结果继续筛选...${PLAIN}"
   fi
 
   if [ ! -s "$result_file" ]; then

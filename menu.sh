@@ -119,7 +119,7 @@ run_once() {
     IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip-run
   else
     # 极速模式：减少探测与下载测速规模，显著缩短时间
-    IP_MODE="$mode" TOP_N="$topn" TOP_TEST=20 DOWNLOAD_TOP=8 BUDGET=1200 CONCURRENCY=120 ROUNDS=3 SKIP_FIRST=1 TIMEOUT=2s /usr/local/bin/cfip-run
+    IP_MODE="$mode" TOP_N="$topn" TOP_TEST=20 DOWNLOAD_TOP=8 BUDGET=1200 CONCURRENCY=120 ROUNDS=3 SKIP_FIRST=1 TIMEOUT=2s MAX_SCAN_SECONDS=90 /usr/local/bin/cfip-run
   fi
 }
 
