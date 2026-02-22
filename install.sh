@@ -12,26 +12,49 @@ if [[ ${EUID:-0} -ne 0 ]]; then
 fi
 
 PROJECT_DIR="/opt/montecarlo-ip-searcher"
-UPSTREAM_REPO="https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
-UPSTREAM_REPO_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 TMP_ASSETS_DIR="/tmp/cfipup2dns-assets"
 RAW_BASE="https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
 RAW_BASE_PROXY="https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
 
-mkdir -p "$TMP_ASSETS_DIR"
+mkdir -p "$TMP_ASSETS_DIR" "$PROJECT_DIR"
 
 fetch_asset() {
   local name="$1"
   local dst="$TMP_ASSETS_DIR/$name"
-
-  if [[ -f "$SCRIPT_DIR/$name" ]]; then
-    cp -f "$SCRIPT_DIR/$name" "$dst"
-    return 0
-  fi
-
   curl -fsSL "$RAW_BASE/$name" -o "$dst" \
     || curl -fsSL "$RAW_BASE_PROXY/$name" -o "$dst"
+}
+
+download_mcis_release() {
+  local arch rel_arch tag url url_proxy tgz
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) rel_arch="amd64" ;;
+    aarch64|arm64) rel_arch="arm64" ;;
+    *)
+      echo -e "${RED}[!] 不支持的架构: $arch（当前仅支持 amd64/arm64）${PLAIN}"
+      exit 1
+      ;;
+  esac
+
+  tag="${MCIS_TAG:-v0.2.3}"
+  tgz="$PROJECT_DIR/mcis-release.tgz"
+  url="https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/${tag}/mcis-${tag}-linux-${rel_arch}.tar.gz"
+  url_proxy="https://gh-proxy.com/${url}"
+
+  echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${rel_arch})${PLAIN}"
+  curl -fL "$url" -o "$tgz" || curl -fL "$url_proxy" -o "$tgz"
+
+  tar -xzf "$tgz" -C "$PROJECT_DIR"
+  rm -f "$tgz"
+
+  if [[ ! -x "$PROJECT_DIR/mcis" ]]; then
+    echo -e "${RED}[!] mcis 解压后不可执行${PLAIN}"
+    exit 1
+  fi
+
+  mv -f "$PROJECT_DIR/mcis" "$PROJECT_DIR/montecarlo-ip-searcher"
+  chmod +x "$PROJECT_DIR/montecarlo-ip-searcher"
 }
 
 write_config() {
@@ -49,63 +72,29 @@ write_config() {
 EOF
 }
 
-echo -e "${GREEN}[*] 1/7 安装基础依赖...${PLAIN}"
+echo -e "${GREEN}[*] 1/6 安装基础依赖...${PLAIN}"
 apt-get update
-apt-get install -y jq wget git curl ca-certificates
+apt-get install -y jq wget git curl ca-certificates tar
 
-echo -e "${GREEN}[*] 2/7 准备运行脚本资源...${PLAIN}"
+echo -e "${GREEN}[*] 2/6 准备运行脚本资源...${PLAIN}"
 fetch_asset cfip.sh
 fetch_asset menu.sh
 chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
 
-echo -e "${GREEN}[*] 3/7 安装 Go（固定 1.25.5）...${PLAIN}"
-GO_VERSION="1.25.5"
-GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+echo -e "${GREEN}[*] 3/6 安装 mcis（使用预编译二进制，无需本机 Go）...${PLAIN}"
+download_mcis_release
 
-# 始终确保 /usr/local/go 与 go.mod 要求版本一致，避免 GOTOOLCHAIN 自动下载损坏
-if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
-  rm -rf /usr/local/go
-  wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz
-  tar -C /usr/local -xzf /tmp/go.tar.gz
-  rm -f /tmp/go.tar.gz
-fi
+echo -e "${GREEN}[*] 4/6 确认 CIDR 文件...${PLAIN}"
+[[ -s "$PROJECT_DIR/ipv4cidr.txt" ]] || {
+  curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o "$PROJECT_DIR/ipv4cidr.txt" \
+    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o "$PROJECT_DIR/ipv4cidr.txt"
+}
+[[ -s "$PROJECT_DIR/ipv6cidr.txt" ]] || {
+  curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o "$PROJECT_DIR/ipv6cidr.txt" \
+    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o "$PROJECT_DIR/ipv6cidr.txt"
+}
 
-export PATH="/usr/local/go/bin:$PATH"
-export GOTOOLCHAIN=local
-
-# 清理可能损坏的自动下载 toolchain 缓存（避免出现 package ... is not in std）
-rm -rf /root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.linux-amd64 2>/dev/null || true
-
-go env -w GOPROXY=https://goproxy.cn,direct || true
-go version || true
-
-echo -e "${GREEN}[*] 4/7 拉取并编译 montecarlo-ip-searcher...${PLAIN}"
-if [[ -d "$PROJECT_DIR/.git" ]]; then
-  git -C "$PROJECT_DIR" fetch --all --tags
-  git -C "$PROJECT_DIR" reset --hard origin/main
-else
-  rm -rf "$PROJECT_DIR"
-  git clone "$UPSTREAM_REPO" "$PROJECT_DIR" \
-    || git clone "$UPSTREAM_REPO_PROXY" "$PROJECT_DIR"
-fi
-
-cd "$PROJECT_DIR"
-GOTOOLCHAIN=local go mod tidy
-if ! GOTOOLCHAIN=local go build -o montecarlo-ip-searcher ./cmd/mcis; then
-  MAIN_FILE=$(find . -name main.go -print0 | xargs -0 grep -l "package main" | head -n 1)
-  [[ -z "$MAIN_FILE" ]] && { echo -e "${RED}[!] 构建失败：未找到 main.go${PLAIN}"; exit 1; }
-  GOTOOLCHAIN=local go build -o montecarlo-ip-searcher "$(dirname "$MAIN_FILE")"
-fi
-chmod +x montecarlo-ip-searcher
-
-echo -e "${GREEN}[*] 5/7 下载 IPv4/IPv6 CIDR...${PLAIN}"
-curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o ipv4cidr.txt \
-  || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o ipv4cidr.txt
-
-curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o ipv6cidr.txt \
-  || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o ipv6cidr.txt
-
-echo -e "${GREEN}[*] 6/7 处理配置...${PLAIN}"
+echo -e "${GREEN}[*] 5/6 处理配置...${PLAIN}"
 CONFIG_FILE="$PROJECT_DIR/config.json"
 OLD_TOKEN=""; OLD_ZONE=""; OLD_DOMAIN=""; OLD_TTL="60"; OLD_PROXIED="false"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -130,7 +119,7 @@ else
   echo -e "${YELLOW}    可在菜单中选择“2) 修改 Cloudflare 配置”后再运行。${PLAIN}"
 fi
 
-echo -e "${GREEN}[*] 7/7 安装命令与定时任务...${PLAIN}"
+echo -e "${GREEN}[*] 6/6 安装命令与定时任务...${PLAIN}"
 install -m 755 "$TMP_ASSETS_DIR/cfip.sh" /usr/local/bin/cfip-run
 install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip
 install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip-menu

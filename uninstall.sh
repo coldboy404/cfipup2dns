@@ -39,7 +39,7 @@ echo "定时任务已净化。"
 # 3. 删除文件
 echo -e "${YELLOW}[*] 3. 正在删除项目文件...${PLAIN}"
 rm -rf /opt/montecarlo-ip-searcher
-rm -f /usr/local/bin/cfip
+rm -f /usr/local/bin/cfip /usr/local/bin/cfip-run /usr/local/bin/cfip-menu
 
 echo -e "${GREEN}==============================================${PLAIN}"
 echo -e "${GREEN}   卸载完成！系统已恢复纯净。   ${PLAIN}"
