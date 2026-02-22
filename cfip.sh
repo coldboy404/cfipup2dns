@@ -189,7 +189,16 @@ run_one_mode() {
   # shellcheck disable=SC2206
   EXTRA_ARGS=( $MCIS_EXTRA_ARGS )
 
+  set +e
   "$PROJECT_DIR/montecarlo-ip-searcher" "${MCIS_ARGS[@]}" "${EXTRA_ARGS[@]}" > "$result_file" 2>&1
+  mcis_code=$?
+  set -e
+
+  if [ "$mcis_code" -ne 0 ]; then
+    echo -e "${RED}[!] mcis 执行失败（退出码: ${mcis_code}）${PLAIN}"
+    tail -n 40 "$result_file" 2>/dev/null || true
+    return 1
+  fi
 
   if [ ! -s "$result_file" ]; then
     echo -e "${RED}[!] IPv${mode} 扫描结果为空${PLAIN}"
