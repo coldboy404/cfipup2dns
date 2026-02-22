@@ -80,7 +80,9 @@ download_mcis_release() {
   url_proxy="https://gh-proxy.com/${url}"
 
   echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${MCIS_ARCH})${PLAIN}"
-  curl -fL "$url" -o "$tgz" || curl -fL "$url_proxy" -o "$tgz"
+  # 防止网络卡死：单链接超时后自动切换备用源，仍失败则回退源码编译
+  curl -fL --connect-timeout 8 --max-time 120 --retry 2 "$url" -o "$tgz" \
+    || curl -fL --connect-timeout 8 --max-time 120 --retry 2 "$url_proxy" -o "$tgz"
 
   tar -xzf "$tgz" -C "$PROJECT_DIR"
   rm -f "$tgz"
@@ -204,6 +206,7 @@ if download_mcis_release; then
     fi
   fi
 else
+  echo -e "${YELLOW}[!] 预编译下载失败或超时，自动切源码编译（可能更慢但更稳）${PLAIN}"
   build_mcis_from_source
 fi
 
