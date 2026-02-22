@@ -192,8 +192,8 @@ setup_cron() {
   local CRON_TMP
   CRON_TMP=$(mktemp)
   crontab -l 2>/dev/null | grep -v "cfip-run" > "$CRON_TMP" || true
-  echo "0 */2 * * * /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$CRON_TMP"
-  echo "@reboot sleep 60 && /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$CRON_TMP"
+  echo "0 */2 * * * IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$CRON_TMP"
+  echo "@reboot sleep 60 && IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$CRON_TMP"
   crontab "$CRON_TMP"
   rm -f "$CRON_TMP"
 }

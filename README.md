@@ -54,16 +54,17 @@ IP_MODE=both TOP_N=5 cfip-run
 
 ## 定时任务（默认开启）
 
-安装完成后会自动写入 root crontab：
+安装完成后默认写入：
 
 ```cron
-0 */2 * * * /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/cron.log 2>&1
-@reboot sleep 60 && /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/boot.log 2>&1
+0 */2 * * * IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/cron.log 2>&1
+@reboot sleep 60 && IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/boot.log 2>&1
 ```
 
-含义：
-- 每 **2 小时** 自动执行一次优选（默认就是 IPv4 5 条 + IPv6 5 条）
-- 服务器重启后 60 秒自动执行一次
+你可以在菜单里用 **4) 更改定时任务** 自定义：
+- 运行间隔（每几小时）
+- 优选类型（4 / 6 / both）
+- 写入数量（TOP_N）
 
 ---
 
@@ -77,7 +78,7 @@ cfip
 1. 安装 / 更新
 2. 修改 Cloudflare 配置
 3. 立即运行一次优选
-4. 查看日志
+4. 更改定时任务
 5. 查看状态
 6. 卸载
 

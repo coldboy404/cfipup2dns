@@ -115,12 +115,53 @@ run_once() {
   IP_MODE="$mode" TOP_N="$topn" /usr/local/bin/cfip-run
 }
 
-show_logs() {
-  if [[ -f "$PROJECT_DIR/cron.log" ]]; then
-    tail -n 80 "$PROJECT_DIR/cron.log"
-  else
-    echo -e "${YELLOW}[!] 还没有日志${PLAIN}"
+edit_cron_task() {
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo -e "${RED}[!] 当前系统未安装 crontab，无法设置定时任务${PLAIN}"
+    return 1
   fi
+
+  local old_line interval mode topn cron_tmp
+  old_line=$(crontab -l 2>/dev/null | grep -E "/usr/local/bin/cfip-run.*cron.log" | head -n1 || true)
+
+  echo -e "${YELLOW}[*] 更改定时任务${PLAIN}"
+  if [[ -n "$old_line" ]]; then
+    echo "当前任务：$old_line"
+  else
+    echo "当前未检测到 cfip-run 定时任务，将创建新任务。"
+  fi
+
+  read -rp "运行间隔（小时，1-24）[2]: " interval
+  read -rp "优选类型 (4/6/both) [both]: " mode
+  read -rp "每种写入数量 TOP_N [5]: " topn
+
+  interval=${interval:-2}
+  mode=${mode:-both}
+  topn=${topn:-5}
+
+  if ! [[ "$interval" =~ ^[0-9]+$ ]] || (( interval < 1 || interval > 24 )); then
+    echo -e "${RED}[!] 运行间隔必须是 1-24 的整数${PLAIN}"
+    return 1
+  fi
+
+  if [[ "$mode" != "4" && "$mode" != "6" && "$mode" != "both" ]]; then
+    echo -e "${RED}[!] 优选类型仅支持 4 / 6 / both${PLAIN}"
+    return 1
+  fi
+
+  if ! [[ "$topn" =~ ^[0-9]+$ ]] || (( topn < 1 )); then
+    echo -e "${RED}[!] TOP_N 必须是大于等于 1 的整数${PLAIN}"
+    return 1
+  fi
+
+  cron_tmp=$(mktemp)
+  crontab -l 2>/dev/null | grep -v "cfip-run" | grep -v "montecarlo-ip-searcher" > "$cron_tmp" || true
+  echo "0 */${interval} * * * IP_MODE=${mode} TOP_N=${topn} /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$cron_tmp"
+  echo "@reboot sleep 60 && IP_MODE=${mode} TOP_N=${topn} /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$cron_tmp"
+  crontab "$cron_tmp"
+  rm -f "$cron_tmp"
+
+  echo -e "${GREEN}[+] 定时任务已更新：每 ${interval} 小时执行一次，模式 ${mode}，TOP_N=${topn}${PLAIN}"
 }
 
 check_status() {
@@ -150,7 +191,7 @@ while true; do
   echo "1) 安装 / 更新"
   echo "2) 修改 Cloudflare 配置"
   echo "3) 立即运行一次优选"
-  echo "4) 查看日志"
+  echo "4) 更改定时任务"
   echo "5) 查看状态"
   echo "6) 卸载"
   echo "0) 退出"
@@ -161,7 +202,7 @@ while true; do
     1) run_install; pause ;;
     2) edit_config; pause ;;
     3) run_once; pause ;;
-    4) show_logs; pause ;;
+    4) edit_cron_task; pause ;;
     5) check_status; pause ;;
     6) run_uninstall; pause ;;
     0) echo "已退出。"; exit 0 ;;
