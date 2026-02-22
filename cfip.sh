@@ -244,7 +244,12 @@ run_one_mode() {
 
   echo -e "${GREEN}[+] IPv${mode} 筛选成功！模式: ${SORT_MODE}，共 $IP_COUNT 个 IP${PLAIN}"
   echo -e "${YELLOW}[*] 最终入选 IPv${mode} 列表：${PLAIN}"
-  jq -r '.result[] | "- " + .ip + " | score_ms=" + ((.score_ms // 0)|tostring) + " | download_mbps=" + ((.download_mbps // 0)|tostring) + " | colo=" + ((.colo // "-")|tostring)' "$final_ips"
+  jq -r '.result | to_entries[] | . as $e | ($e.value.download_mbps // 0) as $mbps | ($e.value.score_ms // 0) as $ms |
+    "  " + ((($e.key + 1)|tostring)) + ". " + ($e.value.ip // "-") +
+    (if $mbps > 0 then " | " + ((((($mbps * 100) | round) / 100))|tostring) + " Mbps" else "" end) +
+    (if $ms > 0 then " | " + ($ms|tostring) + " ms" else "" end) +
+    (if (($e.value.colo // "") != "" and ($e.value.colo // "-") != "-") then " | " + ($e.value.colo|tostring) else "" end)
+  ' "$final_ips"
 
   EXISTING_RECORDS=$(cf_api GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?type=$dns_type&name=$CF_DOMAIN")
   cf_api_check "$EXISTING_RECORDS"

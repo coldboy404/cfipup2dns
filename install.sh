@@ -214,20 +214,24 @@ fetch_asset menu.sh
 chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
 
 echo -e "${GREEN}[*] 3/6 安装 mcis...${PLAIN}"
-if should_try_prebuilt && download_mcis_release; then
-  if binary_self_check; then
-    echo -e "${GREEN}[+] 预编译 mcis 可用${PLAIN}"
-  else
-    rc=$?
-    if [[ $rc -eq 2 ]]; then
-      build_mcis_from_source
+if should_try_prebuilt; then
+  if download_mcis_release; then
+    if binary_self_check; then
+      echo -e "${GREEN}[+] 预编译 mcis 可用${PLAIN}"
     else
-      echo -e "${YELLOW}[!] 预编译 mcis 自检失败，自动切源码编译${PLAIN}"
-      build_mcis_from_source
+      rc=$?
+      if [[ $rc -eq 2 ]]; then
+        build_mcis_from_source
+      else
+        echo -e "${YELLOW}[!] 预编译 mcis 自检失败，自动切源码编译${PLAIN}"
+        build_mcis_from_source
+      fi
     fi
+  else
+    echo -e "${YELLOW}[!] 预编译下载失败或超时，自动切源码编译（更稳）${PLAIN}"
+    build_mcis_from_source
   fi
 else
-  echo -e "${YELLOW}[!] 已跳过/失败预编译安装，自动切源码编译（更稳）${PLAIN}"
   build_mcis_from_source
 fi
 
