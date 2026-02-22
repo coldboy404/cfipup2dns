@@ -7,7 +7,19 @@
 
 ---
 
-## 快速开始
+## 一条命令全搞定（推荐）
+
+在服务器 SSH 里直接执行：
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh)"
+```
+
+> 说明：该命令会拉起交互式菜单，一路选择即可完成安装、配置、运行、查看日志、卸载。
+
+---
+
+## 常规安装
 
 ```bash
 git clone https://github.com/coldboy404/cfipup2dns.git
@@ -21,10 +33,37 @@ bash install.sh
 cd cfipup2dns && git pull && bash install.sh
 ```
 
-安装后配置：
+安装后会提供两个命令：
+- `cfip`：直接执行优选
+- `cfip-menu`：交互式菜单管理
+
+---
+
+## 菜单功能
+
+执行：
 
 ```bash
-nano /opt/montecarlo-ip-searcher/config.json
+cfip-menu
+```
+
+菜单支持：
+1. 快速部署（安装/更新 + 配置 + 首次运行）
+2. 安装 / 更新
+3. 修改 Cloudflare 配置
+4. 立即运行一次优选
+5. 查看日志
+6. 查看状态
+7. 卸载
+
+---
+
+## 配置文件
+
+路径：
+
+```bash
+/opt/montecarlo-ip-searcher/config.json
 ```
 
 字段说明：
@@ -42,40 +81,11 @@ nano /opt/montecarlo-ip-searcher/config.json
 - **IPv4：筛选并写入 5 个 A 记录**
 - **IPv6：筛选并写入 5 个 AAAA 记录**
 
-也就是默认相当于：
+等价于：
+
 ```bash
 IP_MODE=both TOP_N=5 cfip
 ```
-
----
-
-## 使用
-
-手动运行：
-
-```bash
-cfip
-```
-
-日志：
-
-```bash
-tail -f /opt/montecarlo-ip-searcher/cron.log
-```
-
-安装脚本会自动添加：
-- 每 2 小时执行一次
-- 开机自启执行一次
-
----
-
-## 新增能力（对齐上游近期更新）
-
-- 多轮测速稳定化：`ROUNDS` + `SKIP_FIRST`
-- 机房过滤：`COLO_ALLOW` / `COLO_EXCLUDE`
-- 自定义测速文件：`DOWNLOAD_URL`
-- IPv4 / IPv6 / 双栈模式切换：`IP_MODE=4|6|both`
-- 支持 Cloudflare `ttl` / `proxied`
 
 ---
 

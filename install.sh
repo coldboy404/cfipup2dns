@@ -130,6 +130,7 @@ END
 # 6. 安装运行脚本
 echo -e "${GREEN}[*] 6. 安装运行脚本...${PLAIN}"
 install -m 755 "$SCRIPT_DIR/cfip.sh" /usr/local/bin/cfip
+install -m 755 "$SCRIPT_DIR/menu.sh" /usr/local/bin/cfip-menu
 
 # 7. 添加定时任务（每2小时）
 echo -e "${GREEN}[*] 7. 设置定时任务 (每2小时 + 开机自启)...${PLAIN}"
