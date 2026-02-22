@@ -35,16 +35,31 @@ bash -c "$(curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/col
 
 ## 默认行为
 
-`cfip-run` 默认执行双栈：
+`cfip-run` 默认执行双栈优选：
 
-- IPv4：写入 5 条 A
-- IPv6：写入 5 条 AAAA
+- IPv4：写入 5 条 A 记录
+- IPv6：写入 5 条 AAAA 记录
 
 等价于：
 
 ```bash
 IP_MODE=both TOP_N=5 cfip-run
 ```
+
+---
+
+## 定时任务（默认开启）
+
+安装完成后会自动写入 root crontab：
+
+```cron
+0 */2 * * * /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/cron.log 2>&1
+@reboot sleep 60 && /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/boot.log 2>&1
+```
+
+含义：
+- 每 **2 小时** 自动执行一次优选（默认就是 IPv4 5 条 + IPv6 5 条）
+- 服务器重启后 60 秒自动执行一次
 
 ---
 
@@ -55,13 +70,12 @@ cfip
 ```
 
 支持：
-1. 快速部署（安装/更新 + 配置 + 首次运行）
-2. 安装 / 更新
-3. 修改 Cloudflare 配置
-4. 立即运行一次优选
-5. 查看日志
-6. 查看状态
-7. 卸载
+1. 安装 / 更新
+2. 修改 Cloudflare 配置
+3. 立即运行一次优选
+4. 查看日志
+5. 查看状态
+6. 卸载
 
 ---
 
@@ -70,15 +84,15 @@ cfip
 ```bash
 IP_MODE=both   # 4 / 6 / both
 TOP_N=5        # 每个模式写入数量
-TOP_TEST=50
-CONCURRENCY=50
+TOP_TEST=20
+CONCURRENCY=200
 BUDGET=3000
 TIMEOUT=3s
-HEADS=8
+HEADS=4
 
-DOWNLOAD_TOP=50
-DOWNLOAD_BYTES=5000000
-DOWNLOAD_TIMEOUT=8s
+DOWNLOAD_TOP=5
+DOWNLOAD_BYTES=50000000
+DOWNLOAD_TIMEOUT=45s
 DOWNLOAD_URL=https://example.com/large.bin
 
 ROUNDS=6
