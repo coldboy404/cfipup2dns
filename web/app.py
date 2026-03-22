@@ -195,6 +195,18 @@ def save_cron_text(content):
     return content
 
 
+def normalize_ip_row(version, row):
+    latency = row.get("latency_ms")
+    if latency in (None, ""):
+        latency = row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
+    return {
+        "version": version,
+        "ip": row.get("ip"),
+        "latency_ms": latency,
+        "download_mbps": row.get("download_mbps"),
+    }
+
+
 def load_selected_ips():
     items = []
     for version, path in BEST_IP_FILES.items():
@@ -204,19 +216,11 @@ def load_selected_ips():
             obj = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        mode = obj.get("mode", "")
         for row in obj.get("result", []) or []:
             ip = row.get("ip")
             if not ip:
                 continue
-            items.append({
-                "version": version,
-                "ip": ip,
-                "latency_ms": row.get("latency_ms"),
-                "download_mbps": row.get("download_mbps"),
-                "score_ms": row.get("score_ms"),
-                "sort_mode": mode,
-            })
+            items.append(normalize_ip_row(version, row))
     return items
 
 
@@ -232,7 +236,6 @@ def render_index():
         "CF_DOMAIN": html.escape(state["domain"]),
         "CF_TTL": html.escape(state["ttl"]),
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
-        "CRON_TEXT": html.escape(cron_text),
         "SCHEDULE_ENABLED_CHECKED": "checked" if cron_form["enabled"] else "",
         "SCHEDULE_REBOOT_CHECKED": "checked" if cron_form["reboot"] else "",
         "SCHEDULE_INTERVAL": str(cron_form["interval_hours"]),
@@ -303,7 +306,7 @@ def schedule_loop():
                 last_minute = key
                 maybe_run_scheduled(now)
         except Exception as e:
-            append_log(f"[scheduler-error] {e}\n")
+            append_log(f"[计划任务错误] {e}\n")
         time.sleep(1)
 
 
@@ -326,7 +329,7 @@ def run_job(env):
         "selected_ips": [],
     })
     chunks = []
-    append_log(f"\n===== {datetime.now().isoformat()} started =====\n")
+    append_log(f"\n===== {datetime.now().isoformat()} 开始执行 =====\n")
     proc = subprocess.Popen(
         RUN_CMD,
         shell=True,
@@ -357,7 +360,7 @@ def run_job(env):
         "ended_at": time.time(),
         "selected_ips": load_selected_ips(),
     })
-    append_log(f"===== {datetime.now().isoformat()} finished code={code} =====\n")
+    append_log(f"===== {datetime.now().isoformat()} 执行结束，退出码={code} =====\n")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -370,15 +373,15 @@ class Handler(BaseHTTPRequestHandler):
             if LAST_RUN.get("running"):
                 live_parts.append("[运行中] 实时刷新中...")
             if LAST_RUN.get("started_at"):
-                live_parts.append(f"started_at={datetime.fromtimestamp(LAST_RUN['started_at']).isoformat()}")
+                live_parts.append(f"开始时间: {datetime.fromtimestamp(LAST_RUN['started_at']).isoformat()}")
             if LAST_RUN.get("ended_at"):
-                live_parts.append(f"ended_at={datetime.fromtimestamp(LAST_RUN['ended_at']).isoformat()}")
+                live_parts.append(f"结束时间: {datetime.fromtimestamp(LAST_RUN['ended_at']).isoformat()}")
             if LAST_RUN.get("code") is not None:
-                live_parts.append(f"exit_code={LAST_RUN['code']}")
+                live_parts.append(f"退出码: {LAST_RUN['code']}")
             if LAST_RUN.get("stdout"):
-                live_parts.append("[stdout]\n" + LAST_RUN["stdout"])
+                live_parts.append("[输出]\n" + LAST_RUN["stdout"])
             if LAST_RUN.get("stderr"):
-                live_parts.append("[stderr]\n" + LAST_RUN["stderr"])
+                live_parts.append("[错误]\n" + LAST_RUN["stderr"])
             live_logs = "\n\n".join([p for p in live_parts if p]).strip()
             file_logs = ""
             if LOG_FILE.exists():
@@ -392,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
         if path == "/api/schedule":
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
-            return json_response(self, {"ok": True, "schedule": cron_state(raw), "raw": raw})
+            return json_response(self, {"ok": True, "schedule": cron_state(raw)})
         if path == "/api/best-ips":
             return json_response(self, {"ok": True, "result": load_selected_ips()})
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
@@ -410,13 +413,6 @@ class Handler(BaseHTTPRequestHandler):
             cfg = save_config_from_form(body or {})
             return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
 
-        if path == "/api/cron":
-            try:
-                content = save_cron_text(body.get("content") or "")
-            except ValueError as e:
-                return json_response(self, {"ok": False, "error": str(e)}, 400)
-            return json_response(self, {"ok": True, "raw": content, "schedule": cron_state(content)})
-
         if path == "/api/schedule":
             content = build_cron_text(
                 bool(body.get("enabled", False)),
@@ -426,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("top_n", 3),
             )
             save_cron_text(content)
-            return json_response(self, {"ok": True, "raw": content, "schedule": cron_state(content)})
+            return json_response(self, {"ok": True, "schedule": cron_state(content)})
 
         if path == "/api/run":
             env = os.environ.copy()

@@ -40,8 +40,7 @@
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input, select, textarea, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
-    textarea { min-height: 132px; resize: vertical; }
+    input, select, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
     button { background: linear-gradient(135deg, var(--primary), var(--primary-2)); border: none; font-weight: 700; cursor: pointer; }
     button.secondary { background: rgba(255,255,255,.06); border: 1px solid var(--line); }
     button.warn { background: linear-gradient(135deg, #ff9f43, #ffb347); }
@@ -57,7 +56,6 @@
     .ip-tags { display: flex; gap: 8px; flex-wrap: wrap; }
     .tag { border-radius: 999px; padding: 4px 8px; font-size: 12px; background: rgba(255,255,255,.06); color: #dbe7ff; border: 1px solid rgba(255,255,255,.08); }
     pre { margin: 0; min-height: 180px; background: #0a0f1f; color: #c6ffd9; border-radius: 14px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid rgba(255,255,255,.06); }
-    details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       .row-2, .row-3 { grid-template-columns: 1fr; }
@@ -126,13 +124,13 @@
             <div>
               <label for="ipMode">IP 模式</label>
               <select id="ipMode">
-                <option value="both">both</option>
-                <option value="4">4</option>
-                <option value="6">6</option>
+                <option value="both">IPv4 / IPv6</option>
+                <option value="4">IPv4</option>
+                <option value="6">IPv6</option>
               </select>
             </div>
             <div>
-              <label for="topN">TOP_N</label>
+              <label for="topN">优选数量</label>
               <input id="topN" type="number" min="1" value="5" />
             </div>
             <div>
@@ -160,13 +158,13 @@
               <div>
                 <label for="scheduleMode">IP 模式</label>
                 <select id="scheduleMode">
-                  <option value="both" {{SCHEDULE_MODE_BOTH}}>both</option>
-                  <option value="4" {{SCHEDULE_MODE_4}}>4</option>
-                  <option value="6" {{SCHEDULE_MODE_6}}>6</option>
+                  <option value="both" {{SCHEDULE_MODE_BOTH}}>IPv4 / IPv6</option>
+                  <option value="4" {{SCHEDULE_MODE_4}}>IPv4</option>
+                  <option value="6" {{SCHEDULE_MODE_6}}>IPv6</option>
                 </select>
               </div>
               <div>
-                <label for="scheduleTopN">TOP_N</label>
+                <label for="scheduleTopN">优选数量</label>
                 <input id="scheduleTopN" type="number" min="1" max="50" value="{{SCHEDULE_TOPN}}" />
               </div>
             </div>
@@ -178,14 +176,6 @@
               <button onclick="saveSimpleSchedule()">保存</button>
               <button class="secondary" onclick="reloadSchedule()">读取</button>
             </div>
-            <details>
-              <summary>高级模式</summary>
-              <textarea id="cron">{{CRON_TEXT}}</textarea>
-              <div class="toolbar">
-                <button class="secondary" onclick="saveCron()">保存原始计划</button>
-                <button class="secondary" onclick="setRecommendedCron()">恢复默认</button>
-              </div>
-            </details>
           </div>
         </div>
       </div>
@@ -223,13 +213,12 @@ function applyForm(form) {
   document.getElementById('proxied').checked = !!form.proxied;
 }
 
-function applySchedule(schedule, raw) {
+function applySchedule(schedule) {
   document.getElementById('scheduleEnabled').checked = !!schedule.enabled;
   document.getElementById('scheduleInterval').value = schedule.interval_hours || 6;
   document.getElementById('scheduleMode').value = schedule.ip_mode || 'both';
   document.getElementById('scheduleTopN').value = schedule.top_n || 3;
   document.getElementById('scheduleReboot').checked = !!schedule.reboot;
-  document.getElementById('cron').value = raw || '';
 }
 
 async function saveConfig() {
@@ -253,7 +242,7 @@ async function reloadSchedule() {
   const r = await fetch('/api/schedule');
   const j = await r.json();
   if (!j.ok) return alert('读取失败');
-  applySchedule(j.schedule || {}, j.raw || '');
+  applySchedule(j.schedule || {});
 }
 
 function toggleToken() {
@@ -275,10 +264,12 @@ function renderBestIps(items) {
     return;
   }
   root.innerHTML = items.map(item => {
+    const speed = Number(item.download_mbps || 0);
+    const latency = item.latency_ms;
     const tags = [
       `<span class="tag">IPv${item.version}</span>`,
-      item.download_mbps !== null && item.download_mbps !== undefined ? `<span class="tag">下载 ${formatNumber(item.download_mbps)} Mbps</span>` : '',
-      item.latency_ms !== null && item.latency_ms !== undefined ? `<span class="tag">延迟 ${formatNumber(item.latency_ms)} ms</span>` : '',
+      speed > 0 ? `<span class="tag">下载 ${formatNumber(speed)} Mbps</span>` : `<span class="tag">下载未测出</span>`,
+      latency !== null && latency !== undefined && latency !== '' ? `<span class="tag">延迟 ${formatNumber(latency)} ms</span>` : `<span class="tag">延迟未测出</span>`,
     ].filter(Boolean).join('');
     return `<div class="ip-item"><div class="ip-main"><code>${item.ip}</code></div><div class="ip-tags">${tags}</div></div>`;
   }).join('');
@@ -318,7 +309,7 @@ async function saveSimpleSchedule() {
   });
   const j = await r.json();
   if (!j.ok) return alert('保存失败');
-  applySchedule(j.schedule || {}, j.raw || '');
+  applySchedule(j.schedule || {});
   alert('已保存');
 }
 
@@ -340,23 +331,6 @@ async function loadStatus() {
   if (j.selected_ips && j.selected_ips.length) {
     renderBestIps(j.selected_ips);
   }
-}
-
-async function saveCron() {
-  const content = document.getElementById('cron').value;
-  const r = await fetch('/api/cron', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({content})
-  });
-  const j = await r.json();
-  if (!j.ok) return alert('保存失败');
-  applySchedule(j.schedule || {}, j.raw || content);
-  alert('已保存');
-}
-
-function setRecommendedCron() {
-  document.getElementById('cron').value = `SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 */6 * * * IP_MODE=both TOP_N=3 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1\n@reboot sleep 30 && IP_MODE=both TOP_N=3 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1\n`;
 }
 
 function bindLogEvents() {

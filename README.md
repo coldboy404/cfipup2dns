@@ -1,207 +1,138 @@
 # cfipup2dns
 
-一个面向国内服务器环境的 **Cloudflare 优选 IP 自动 DDNS** 项目，现已支持：
+一个面向国内服务器环境的 **Cloudflare 优选 IP 自动 DDNS** 项目。
+
+现在支持：
 
 - ✅ Docker 一体化部署
 - ✅ WebUI 图形管理（默认端口 `9527`）
-- ✅ 定时任务管理（cron）
-- ✅ 手动一键执行优选
-- ✅ 日志在线查看
-- ✅ 支持官方源稳定构建 + 可选国内加速源（APT 镜像 + GitHub 代理）
+- ✅ 手动一键优选并更新 DNS
+- ✅ 定时任务管理
+- ✅ 在线查看运行日志
+- ✅ 展示已优选出的 IPv4 / IPv6、下载速度、延迟
+- ✅ 默认接入上游 `montecarlo-ip-searcher` 的较新版本与顺序测速模式
 
 ---
 
 ## 项目主页
 
 - GitHub: https://github.com/coldboy404/cfipup2dns
+- 上游项目: https://github.com/Leo-Mu/montecarlo-ip-searcher
 
 ---
 
-## 快速开始（Docker Compose）
+## 快速部署
 
-> 适合国内机器，默认已经配置了加速源。
+推荐直接使用：
 
 ```bash
 git clone https://gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
-docker compose up -d --build
+bash docker/up.sh
 ```
 
 启动后访问：
 
 - `http://你的服务器IP:9527`
 
----
-
-## 国内安装 Docker（加速源）
-
-> 适用于 Debian / Ubuntu。安装完成后可直接执行本项目的 `docker compose`。
-
-### 1) 安装 Docker CE（多镜像源可切换）
-
-可选源（按你的机器网络选一个最快的）：
-
-- `https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/ubuntu`
-- `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`
-- `https://repo.huaweicloud.com/docker-ce/linux/ubuntu`
-- `https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu`
+后续更新：
 
 ```bash
-# 可改成上面任意一个
-DOCKER_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/ubuntu"
-
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL "${DOCKER_APT_MIRROR}/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_APT_MIRROR} \
-  $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-```
-
-### 2) 可选：配置 Docker Hub 镜像加速（多源）
-
-```bash
-sudo mkdir -p /etc/docker
-cat <<'EOF' | sudo tee /etc/docker/daemon.json
-{
-  "registry-mirrors": [
-    "https://docker.m.daocloud.io",
-    "https://docker.1panel.live",
-    "https://dockerproxy.com"
-  ]
-}
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl restart docker
-```
-
-### 3) 验证
-
-```bash
-docker --version
-docker compose version
-```
-
-### 4) `docker pull` 慢时重试（建议 1~2 次）
-
-```bash
-for i in 1 2 3; do
-  docker pull nginx:latest && break || sleep 3
-done
+cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 ```
 
 ---
 
-## 目录结构
+## Web 面板功能
 
-```text
-cfipup2dns/
-├─ cfip.sh
-├─ config.example.json
-├─ Dockerfile
-├─ docker-compose.yml
-├─ docker/
-│  ├─ entrypoint.sh
-│  └─ init-mcis.sh
-└─ web/
-   ├─ app.py
-   ├─ templates/index.html
-   └─ static/
-```
+### 1. Cloudflare 配置
+可在页面直接配置并保存：
 
----
+- API Token
+- Zone ID
+- 域名
+- TTL
+- 是否代理
 
-## WebUI 功能
+### 2. 立即执行
+支持手动触发优选：
 
-### 1) Cloudflare 配置
-可直接编辑并保存 `config.json`，主要字段：
+- `IPv4`
+- `IPv6`
+- `IPv4 / IPv6`
 
-- `cloudflare.token`
-- `cloudflare.zone_id`
-- `cloudflare.domain`
-- `cloudflare.ttl`
-- `cloudflare.proxied`
+并可设置 **优选数量**。
 
-### 2) 立即运行
-支持手动触发：
+运行完成后，页面会展示：
 
-- `IP_MODE=4`（仅 IPv4）
-- `IP_MODE=6`（仅 IPv6）
-- `IP_MODE=both`（双栈）
+- IP 地址
+- IP 类型（IPv4 / IPv6）
+- 下载速度
+- 延迟
 
-并可设置 `TOP_N`。
+### 3. 定时任务
+支持页面直接设置：
 
-### 3) 定时任务
-可在页面直接改 crontab，并即时生效。
+- 是否启用
+- 每隔几小时运行
+- IP 模式
+- 优选数量
+- 开机后自动跑
 
-### 4) 日志查看
-在线查看最近运行日志，便于排查。
+### 4. 运行日志
+日志会尽量中文化展示；底层工具原始输出无法翻译时，保留英文原文。
 
 ---
 
-## 默认端口
+## 与上游项目的差异
 
-- 容器内：`9527`
-- 映射端口：`9527:9527`
+本项目基于 `Leo-Mu/montecarlo-ip-searcher` 做了封装，重点增加：
 
-如果要改端口，修改 `docker-compose.yml`：
+- WebUI 配置管理
+- Cloudflare DNS 自动写入
+- 定时任务
+- 结果持久化
+- 面板化展示
 
-```yaml
-ports:
-  - "9527:9527"
-environment:
-  PORT: 9527
-```
+当前已借鉴上游的新改动：
 
----
+- 上游版本升级到 **v0.2.4**
+- 接入 `--download-mode sequential`
 
-## 国内加速说明
-
-当前默认策略：
-
-- Debian APT：默认走官方源，优先保证稳定构建
-- GitHub 下载代理：默认 `https://gh-proxy.org/`
-
-如需在国内网络显式启用 APT 镜像，可在构建时传入：
-
-```bash
-APT_MIRROR=mirrors.ustc.edu.cn docker compose build --no-cache
-```
-
-也可同时自定义 GitHub 代理：
-
-```bash
-GH_PROXY=https://gh-proxy.org/ docker compose up -d --build
-```
-
-如需持久化到 `.env`，可写入：
-
-```env
-APT_MIRROR=mirrors.ustc.edu.cn
-GH_PROXY=https://gh-proxy.org/
-MCIS_TAG=v0.2.3
-```
+这样在测速阶段通常比一次性把前 N 个全部测速更省时间，尤其适合失败率较高或网络抖动时。
 
 ---
 
-## 数据持久化
+## IPv6 下载速度为 0 / 延迟缺失的说明
+
+这通常不是前端显示 bug，本质上更接近于上游测速结果本身：
+
+- `download_mbps = 0`
+  - 说明下载测速阶段没有拿到有效速度
+  - 不一定代表该 IP 完全不可用
+- 延迟字段缺失
+  - 上游原始结果主要字段是 `total_ms / ttfb_ms / connect_ms / score_ms`
+  - 本项目会优先把这些字段兜底映射成页面里的“延迟”显示
+
+也就是说：
+
+- 页面里的“延迟”现在是一个**兼容显示值**
+- 页面里的“下载未测出”表示**测速没拿到有效速度**，不是前端自己算出来的 0
+
+---
+
+## 数据目录
 
 `docker-compose.yml` 默认挂载：
 
 - `./data:/data`
 
-其中包括：
+主要内容包括：
 
 - 配置文件：`/data/project/config.json`
-- cron 配置：`/data/cron/cfip.cron`
+- 优选结果：`/data/project/best_ips_v4.json`
+- 优选结果：`/data/project/best_ips_v6.json`
+- 定时任务：`/data/cron/cfip.cron`
 - 日志目录：`/data/logs/`
 
 ---
@@ -209,11 +140,11 @@ MCIS_TAG=v0.2.3
 ## 常用命令
 
 ```bash
+# 启动 / 重建
+bash docker/up.sh
+
 # 查看日志
 docker compose logs -f
-
-# 重建并启动
-docker compose up -d --build
 
 # 停止
 docker compose down
@@ -224,4 +155,4 @@ docker compose down
 ## 作者与说明
 
 - 作者：**coldboy404**
-- 说明：本项目用于 Cloudflare DNS 优选 IP 自动更新，重点优化国内服务器部署体验。
+- 说明：本项目用于 Cloudflare DNS 优选 IP 自动更新，重点优化国内服务器的一键部署和面板化管理体验。

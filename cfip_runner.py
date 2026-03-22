@@ -6,7 +6,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,7 +14,7 @@ from pathlib import Path
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", "/data/project"))
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
 GH_PROXY = os.getenv("GH_PROXY", "https://gh-proxy.org/")
-MCIS_TAG = os.getenv("MCIS_TAG", "v0.2.3")
+MCIS_TAG = os.getenv("MCIS_TAG", "v0.2.4")
 IP_MODE = os.getenv("IP_MODE", "both")
 TOP_N = int(os.getenv("TOP_N", "5"))
 TOP_TEST = int(os.getenv("TOP_TEST", "50"))
@@ -25,6 +24,7 @@ ROUNDS = os.getenv("ROUNDS", "4")
 BUDGET = os.getenv("BUDGET", "3000")
 DOWNLOAD_TOP = os.getenv("DOWNLOAD_TOP", "20")
 DOWNLOAD_TIMEOUT = os.getenv("DOWNLOAD_TIMEOUT", "45s")
+DOWNLOAD_MODE = os.getenv("DOWNLOAD_MODE", "sequential")
 DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "")
 DOWNLOAD_BYTES = os.getenv("DOWNLOAD_BYTES", "50000000")
 MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
@@ -48,12 +48,12 @@ def fetch_with_fallback(raw_url, dest, timeout=120):
     last_err = None
     for url in urls:
         try:
-            log(f"[*] download: {url}")
+            log(f"[*] 下载: {url}")
             fetch(url, dest, timeout=timeout)
             return
         except Exception as e:
             last_err = e
-            log(f"[!] download failed: {e}")
+            log(f"[!] 下载失败: {e}")
     raise last_err
 
 
@@ -65,10 +65,12 @@ def ensure_mcis():
     elif arch in ("aarch64", "arm64"):
         mcis_arch = "arm64"
     else:
-        raise RuntimeError(f"unsupported arch: {arch}")
+        raise RuntimeError(f"不支持的架构: {arch}")
 
     mcis_bin = PROJECT_DIR / "montecarlo-ip-searcher"
-    if not mcis_bin.exists():
+    want_version = PROJECT_DIR / ".mcis_version"
+    current_version = want_version.read_text(encoding="utf-8").strip() if want_version.exists() else ""
+    if (not mcis_bin.exists()) or current_version != MCIS_TAG:
         pkg = f"mcis-{MCIS_TAG}-linux-{mcis_arch}.tar.gz"
         raw_url = f"https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/{MCIS_TAG}/{pkg}"
         with tempfile.TemporaryDirectory() as td:
@@ -78,8 +80,11 @@ def ensure_mcis():
                 tar.extractall(PROJECT_DIR)
             src = PROJECT_DIR / "mcis"
             if src.exists():
+                if mcis_bin.exists():
+                    mcis_bin.unlink()
                 src.rename(mcis_bin)
             mcis_bin.chmod(0o755)
+            want_version.write_text(MCIS_TAG, encoding="utf-8")
 
     for name in ("ipv4cidr.txt", "ipv6cidr.txt"):
         p = PROJECT_DIR / name
@@ -92,7 +97,7 @@ def ensure_mcis():
 
 def load_config():
     if not CONFIG_FILE.exists():
-        raise RuntimeError(f"config file not found: {CONFIG_FILE}")
+        raise RuntimeError(f"配置文件不存在: {CONFIG_FILE}")
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -135,11 +140,14 @@ def parse_json_lines(path):
         if ip in seen:
             continue
         seen.add(ip)
+        row["latency_ms"] = row.get("latency_ms") or row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
         uniq.append(row)
+
     dl = [r for r in uniq if float(r.get("download_mbps") or 0) > 0]
     if dl:
         dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
         return "download_mbps", dl[:TOP_N]
+
     scored = [r for r in uniq if float(r.get("score_ms") or 0) > 0]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
     return "score_ms", scored[:TOP_N]
@@ -149,7 +157,7 @@ def run_mode(mode, cfg, mcis_bin):
     dns_type = "A" if mode == "4" else "AAAA"
     cidr_file = PROJECT_DIR / ("ipv4cidr.txt" if mode == "4" else "ipv6cidr.txt")
     if not cidr_file.exists():
-        log(f"[!] skip ipv{mode}: missing {cidr_file}")
+        log(f"[!] 跳过 IPv{mode}: 缺少 {cidr_file}")
         return
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
@@ -166,23 +174,34 @@ def run_mode(mode, cfg, mcis_bin):
     ]
     if int(DOWNLOAD_TOP) > 0:
         args += ["-download-top", DOWNLOAD_TOP, "-download-timeout", DOWNLOAD_TIMEOUT]
+        if DOWNLOAD_MODE in ("all", "sequential"):
+            args += ["-download-mode", DOWNLOAD_MODE]
         if DOWNLOAD_URL:
             args += ["-download-url", DOWNLOAD_URL]
         if DOWNLOAD_BYTES:
             args += ["-download-bytes", DOWNLOAD_BYTES]
 
-    log(f"[*] run mcis ipv{mode}")
+    log(f"[*] 开始优选 IPv{mode}")
+    log(f"[*] 并发: {CONCURRENCY}，轮次: {ROUNDS}，预算: {BUDGET}，测速模式: {DOWNLOAD_MODE}")
     with open(result_file, "w", encoding="utf-8") as out:
         try:
             subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)
         except subprocess.TimeoutExpired:
-            log(f"[*] mcis timeout after {MAX_SCAN_SECONDS}s, continue with partial result")
+            log(f"[!] 扫描超时，已按 {MAX_SCAN_SECONDS}s 截止，继续读取已有结果")
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"mcis failed for ipv{mode}: {e.returncode}")
+            raise RuntimeError(f"mcis 执行失败，IPv{mode}，退出码: {e.returncode}")
 
     sort_mode, best = parse_json_lines(result_file)
     if not best:
-        raise RuntimeError(f"no valid ips found for ipv{mode}")
+        raise RuntimeError(f"IPv{mode} 没有找到可用 IP")
+
+    zero_speed = sum(1 for row in best if float(row.get("download_mbps") or 0) <= 0)
+    if zero_speed:
+        log(f"[!] IPv{mode} 有 {zero_speed} 个结果未测到下载速度，通常表示测速未成功，不一定代表 IP 不可用")
+
+    missing_latency = sum(1 for row in best if not row.get("latency_ms"))
+    if missing_latency:
+        log(f"[!] IPv{mode} 有 {missing_latency} 个结果缺少延迟字段，已尝试用 total_ms / ttfb_ms / connect_ms 兜底")
 
     token = cfg["cloudflare"]["token"]
     zone_id = cfg["cloudflare"]["zone_id"]
@@ -191,12 +210,14 @@ def run_mode(mode, cfg, mcis_bin):
     proxied = cfg["cloudflare"].get("proxied", False)
 
     q = urllib.parse.urlencode({"type": dns_type, "name": domain})
+    log(f"[*] 正在清理旧的 {dns_type} 记录")
     existing = cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
     for rec in existing.get("result", []):
         rid = rec.get("id")
         if rid:
             cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
 
+    log(f"[*] 正在写入新的 {dns_type} 记录，共 {len(best)} 条")
     for row in best:
         cf_request("POST", f"/zones/{zone_id}/dns_records", token, {
             "type": dns_type,
@@ -207,7 +228,7 @@ def run_mode(mode, cfg, mcis_bin):
         })
 
     (PROJECT_DIR / f"best_ips_v{mode}.json").write_text(json.dumps({"mode": sort_mode, "result": best}, ensure_ascii=False, indent=2), encoding="utf-8")
-    log(f"[✓] ipv{mode} updated {len(best)} records by {sort_mode}")
+    log(f"[✓] IPv{mode} 已更新 {len(best)} 条 DNS 记录，排序依据: {sort_mode}")
 
 
 def main():
@@ -216,9 +237,9 @@ def main():
     modes = ["4", "6"] if IP_MODE == "both" else [IP_MODE]
     for mode in modes:
         if mode not in ("4", "6"):
-            raise RuntimeError(f"invalid IP_MODE: {IP_MODE}")
+            raise RuntimeError(f"无效的 IP_MODE: {IP_MODE}")
         run_mode(mode, cfg, mcis_bin)
-    log("[✓] done")
+    log("[✓] 全部执行完成")
 
 
 if __name__ == "__main__":
@@ -226,8 +247,8 @@ if __name__ == "__main__":
         main()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
-        print(f"[HTTPError] {e} {body}", file=sys.stderr)
+        print(f"[HTTP 错误] {e} {body}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        print(f"[错误] {e}", file=sys.stderr)
         sys.exit(1)
