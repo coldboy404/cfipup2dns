@@ -87,7 +87,6 @@
     }
     .tips code, .hint code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 8px; }
     .hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
-    .json-box { min-height: 220px; }
     .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
     @media (max-width: 980px) {
@@ -233,12 +232,6 @@
         </div>
 
         <div class="card">
-          <h3>原始配置 JSON</h3>
-          <div class="desc">默认隐藏成表单；这里仅作为高级查看，不建议手改。</div>
-          <textarea id="jsonView" class="json-box" readonly>{{CONFIG_JSON}}</textarea>
-        </div>
-
-        <div class="card">
           <h3>说明</h3>
           <div class="tips">
             <div>1. 先填 Cloudflare Token、Zone ID、域名，保存后再执行。</div>
@@ -293,7 +286,6 @@ async function saveConfig() {
   const j = await r.json();
   if (!j.ok) return alert('保存失败');
   applyForm(j.form || payload);
-  document.getElementById('jsonView').value = JSON.stringify(j.config || {}, null, 2);
   alert('配置已保存');
 }
 
@@ -302,7 +294,6 @@ async function reloadConfig() {
   const j = await r.json();
   if (!j.ok) return alert('读取失败');
   applyForm(j.form || {});
-  document.getElementById('jsonView').value = JSON.stringify(j.config || {}, null, 2);
 }
 
 async function reloadSchedule() {
