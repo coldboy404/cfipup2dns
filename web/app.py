@@ -107,11 +107,93 @@ def fill_template(template, mapping):
     return template
 
 
+def default_cron_text():
+    return (
+        "SHELL=/bin/sh\n"
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "0 */2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1\n"
+        "@reboot sleep 30 && IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1\n"
+    )
+
+
+def cron_state(text):
+    state = {
+        "enabled": False,
+        "interval_hours": 2,
+        "ip_mode": "both",
+        "top_n": 5,
+        "raw": text or "",
+    }
+    lines = (text or "").splitlines()
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("SHELL=") or s.startswith("PATH=") or s.startswith("@reboot"):
+            continue
+        parts = s.split(None, 5)
+        if len(parts) < 6:
+            continue
+        minute, hour, _day, _month, _weekday, command = parts
+        if RUN_CMD not in command:
+            continue
+        state["enabled"] = True
+        if minute == "0" and hour.startswith("*/"):
+            try:
+                iv = int(hour[2:])
+                if 1 <= iv <= 24:
+                    state["interval_hours"] = iv
+            except Exception:
+                pass
+        for token in command.split():
+            if token.startswith("IP_MODE="):
+                state["ip_mode"] = token.split("=", 1)[1] or "both"
+            elif token.startswith("TOP_N="):
+                try:
+                    state["top_n"] = max(1, int(token.split("=", 1)[1]))
+                except Exception:
+                    pass
+        break
+    return state
+
+
+def build_cron_text(enabled, interval_hours, ip_mode, top_n):
+    try:
+        interval_hours = int(interval_hours)
+    except Exception:
+        interval_hours = 2
+    interval_hours = max(1, min(interval_hours, 24))
+    try:
+        top_n = int(top_n)
+    except Exception:
+        top_n = 5
+    top_n = max(1, min(top_n, 50))
+    if ip_mode not in ("4", "6", "both"):
+        ip_mode = "both"
+
+    lines = [
+        "SHELL=/bin/sh",
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    ]
+    if enabled:
+        lines.append(f"0 */{interval_hours} * * * IP_MODE={ip_mode} TOP_N={top_n} {RUN_CMD} >> /data/logs/cron.log 2>&1")
+        lines.append(f"@reboot sleep 30 && IP_MODE={ip_mode} TOP_N={top_n} {RUN_CMD} >> /data/logs/boot.log 2>&1")
+    return "\n".join(lines) + "\n"
+
+
+def save_cron_text(content):
+    content = (content or "").strip() + "\n"
+    if not content.strip():
+        raise ValueError("cron 内容不能为空")
+    CRON_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CRON_FILE.write_text(content, encoding="utf-8")
+    return content
+
+
 def render_index():
     cfg = load_config()
     state = form_state(cfg)
-    cron_text = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else ""
+    cron_text = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
     raw_json = json.dumps(cfg, ensure_ascii=False, indent=2)
+    cron_form = cron_state(cron_text)
     tpl = load_html()
     return fill_template(tpl, {
         "CF_TOKEN": html.escape(state["token"]),
@@ -121,6 +203,12 @@ def render_index():
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
         "CRON_TEXT": html.escape(cron_text),
         "CONFIG_JSON": html.escape(raw_json),
+        "SCHEDULE_ENABLED_CHECKED": "checked" if cron_form["enabled"] else "",
+        "SCHEDULE_INTERVAL": str(cron_form["interval_hours"]),
+        "SCHEDULE_TOPN": str(cron_form["top_n"]),
+        "SCHEDULE_MODE_4": "selected" if cron_form["ip_mode"] == "4" else "",
+        "SCHEDULE_MODE_6": "selected" if cron_form["ip_mode"] == "6" else "",
+        "SCHEDULE_MODE_BOTH": "selected" if cron_form["ip_mode"] == "both" else "",
     })
 
 
@@ -215,7 +303,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             return json_response(self, {"ok": True, **LAST_RUN})
         if path == "/api/config":
-            return json_response(self, {"ok": True, "config": load_config(), "form": form_state(load_config())})
+            cfg = load_config()
+            return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
+        if path == "/api/schedule":
+            raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
+            return json_response(self, {"ok": True, "schedule": cron_state(raw), "raw": raw})
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
 
     def do_POST(self):
@@ -232,12 +324,21 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
 
         if path == "/api/cron":
-            content = (body.get("content") or "").strip() + "\n"
-            if not content.strip():
-                return json_response(self, {"ok": False, "error": "cron 内容不能为空"}, 400)
-            CRON_FILE.parent.mkdir(parents=True, exist_ok=True)
-            CRON_FILE.write_text(content, encoding="utf-8")
-            return json_response(self, {"ok": True})
+            try:
+                content = save_cron_text(body.get("content") or "")
+            except ValueError as e:
+                return json_response(self, {"ok": False, "error": str(e)}, 400)
+            return json_response(self, {"ok": True, "raw": content, "schedule": cron_state(content)})
+
+        if path == "/api/schedule":
+            content = build_cron_text(
+                bool(body.get("enabled", False)),
+                body.get("interval_hours", 2),
+                body.get("ip_mode", "both"),
+                body.get("top_n", 5),
+            )
+            save_cron_text(content)
+            return json_response(self, {"ok": True, "raw": content, "schedule": cron_state(content)})
 
         if path == "/api/run":
             env = os.environ.copy()

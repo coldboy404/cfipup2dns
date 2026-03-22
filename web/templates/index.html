@@ -89,6 +89,7 @@
     .hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
     .json-box { min-height: 220px; }
     .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       .row-2, .row-3 { grid-template-columns: 1fr; }
@@ -180,14 +181,45 @@
         </div>
 
         <div class="card">
-          <h3>调度计划</h3>
-          <div class="desc">这里仍兼容 crontab 五段格式，但你不需要碰系统 cron。</div>
-          <textarea id="cron">{{CRON_TEXT}}</textarea>
-          <div class="toolbar">
-            <button onclick="saveCron()">保存计划</button>
-            <button class="secondary" onclick="setRecommendedCron()">恢复推荐计划</button>
+          <h3>定时任务</h3>
+          <div class="desc">简单模式下，你只需要选开关、间隔、模式和数量。</div>
+          <div class="fields">
+            <div class="switch">
+              <span>启用自动定时任务</span>
+              <input id="scheduleEnabled" type="checkbox" {{SCHEDULE_ENABLED_CHECKED}} />
+            </div>
+            <div class="row-3">
+              <div>
+                <label for="scheduleInterval">每几小时执行一次</label>
+                <input id="scheduleInterval" type="number" min="1" max="24" value="{{SCHEDULE_INTERVAL}}" />
+              </div>
+              <div>
+                <label for="scheduleMode">自动任务 IP 模式</label>
+                <select id="scheduleMode">
+                  <option value="both" {{SCHEDULE_MODE_BOTH}}>both（双栈）</option>
+                  <option value="4" {{SCHEDULE_MODE_4}}>4（仅 IPv4）</option>
+                  <option value="6" {{SCHEDULE_MODE_6}}>6（仅 IPv6）</option>
+                </select>
+              </div>
+              <div>
+                <label for="scheduleTopN">自动任务 TOP_N</label>
+                <input id="scheduleTopN" type="number" min="1" max="50" value="{{SCHEDULE_TOPN}}" />
+              </div>
+            </div>
+            <div class="toolbar">
+              <button onclick="saveSimpleSchedule()">保存简单计划</button>
+              <button class="secondary" onclick="reloadSchedule()">重新读取</button>
+            </div>
+            <div class="hint">示例：启用 + 每 2 小时 + both + TOP_N=5，就是“每 2 小时自动跑一次双栈优选，每种写 5 条”。</div>
+            <details>
+              <summary>高级模式：手动编辑原始计划</summary>
+              <textarea id="cron">{{CRON_TEXT}}</textarea>
+              <div class="toolbar">
+                <button class="secondary" onclick="saveCron()">保存原始计划</button>
+                <button class="secondary" onclick="setRecommendedCron()">恢复推荐计划</button>
+              </div>
+            </details>
           </div>
-          <div class="hint">推荐默认值：<code>0 */2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh &gt;&gt; /data/logs/cron.log 2&gt;&amp;1</code></div>
         </div>
       </div>
 
@@ -212,13 +244,13 @@
             <div>1. 先填 Cloudflare Token、Zone ID、域名，保存后再执行。</div>
             <div>2. <code>TOP_N</code> 表示每种记录写入 Cloudflare 的 IP 数量。</div>
             <div>3. 开启代理时，A / AAAA 记录会按 Cloudflare 橙云方式写入。</div>
-            <div>4. 页面主页和作者信息已固定为当前项目与作者。</div>
+            <div>4. 定时任务支持简单模式和高级模式，两套都能用。</div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="footer">如果还想继续美化，我下一步可以给你加：密码星号按钮、运行历史卡片、表单校验提示、移动端适配、浅色主题。</div>
+    <div class="footer">如果还要继续，我下一步可以把“定时任务”再做成更像 NAS 面板：每天几点、每周几、开机后是否自动跑。</div>
   </div>
 
 <script>
@@ -238,6 +270,14 @@ function applyForm(form) {
   document.getElementById('domain').value = form.domain || '';
   document.getElementById('ttl').value = form.ttl || 60;
   document.getElementById('proxied').checked = !!form.proxied;
+}
+
+function applySchedule(schedule, raw) {
+  document.getElementById('scheduleEnabled').checked = !!schedule.enabled;
+  document.getElementById('scheduleInterval').value = schedule.interval_hours || 2;
+  document.getElementById('scheduleMode').value = schedule.ip_mode || 'both';
+  document.getElementById('scheduleTopN').value = schedule.top_n || 5;
+  document.getElementById('cron').value = raw || '';
 }
 
 async function saveConfig() {
@@ -265,6 +305,13 @@ async function reloadConfig() {
   document.getElementById('jsonView').value = JSON.stringify(j.config || {}, null, 2);
 }
 
+async function reloadSchedule() {
+  const r = await fetch('/api/schedule');
+  const j = await r.json();
+  if (!j.ok) return alert('读取计划失败');
+  applySchedule(j.schedule || {}, j.raw || '');
+}
+
 function toggleToken() {
   const el = document.getElementById('token');
   el.type = el.type === 'password' ? 'text' : 'password';
@@ -281,6 +328,24 @@ async function runNow() {
   const j = await r.json();
   document.getElementById('runState').textContent = j.running ? '任务已启动...' : '已有任务在运行';
   setTimeout(refreshAll, 1000);
+}
+
+async function saveSimpleSchedule() {
+  const payload = {
+    enabled: document.getElementById('scheduleEnabled').checked,
+    interval_hours: Number(document.getElementById('scheduleInterval').value || 2),
+    ip_mode: document.getElementById('scheduleMode').value,
+    top_n: Number(document.getElementById('scheduleTopN').value || 5),
+  };
+  const r = await fetch('/api/schedule', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!j.ok) return alert('保存失败');
+  applySchedule(j.schedule || {}, j.raw || '');
+  alert('简单计划已保存');
 }
 
 async function loadLogs() {
@@ -305,7 +370,9 @@ async function saveCron() {
     body: JSON.stringify({content})
   });
   const j = await r.json();
-  alert(j.ok ? '计划已保存' : ('保存失败: ' + (j.error || '未知错误')));
+  if (!j.ok) return alert('保存失败: ' + (j.error || '未知错误'));
+  applySchedule(j.schedule || {}, j.raw || content);
+  alert('原始计划已保存');
 }
 
 function setRecommendedCron() {
@@ -317,6 +384,7 @@ async function refreshAll() {
 }
 
 reloadConfig();
+reloadSchedule();
 refreshAll();
 setInterval(loadStatus, 3000);
 </script>
