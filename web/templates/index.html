@@ -292,6 +292,7 @@ function renderBestIps(items) {
 async function loadBestIps() {
   const r = await fetch('/api/best-ips');
   const j = await r.json();
+  renderRunStateMeta(j.updated_at, j.next_run_at);
   renderBestIps(j.result || []);
 }
 
@@ -304,7 +305,7 @@ async function runNow() {
     body: JSON.stringify({ip_mode, top_n})
   });
   const j = await r.json();
-  document.getElementById('runState').textContent = j.running ? '运行中' : '已有任务在运行';
+  document.getElementById('runState').innerHTML = `${j.running ? '运行中' : '已有任务在运行'}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
   setTimeout(() => { loadStatus(); loadBestIps(); }, 1000);
 }
 
@@ -350,7 +351,8 @@ async function loadStatus() {
   const r = await fetch('/api/status');
   const j = await r.json();
   const state = j.running ? '运行中' : ('空闲' + (j.code === null ? '' : ` / 退出码 ${j.code}`));
-  document.getElementById('runState').textContent = state;
+  document.getElementById('runState').innerHTML = `${state}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
+  renderRunStateMeta(j.selected_ips_updated_at, j.next_run_at);
   if (j.selected_ips && j.selected_ips.length) {
     renderBestIps(j.selected_ips);
   }
@@ -372,15 +374,6 @@ loadLogs(true);
 bindLogEvents();
 setInterval(() => { loadStatus(); loadBestIps(); }, 3000);
 setInterval(() => { loadLogs(false); }, 3000);
-</script>
-</body>
-</html>
-dBestIps(); }, 3000);
-setInterval(() => { loadLogs(false); }, 3000);
-</script>
-</body>
-</html>
-erval(() => { loadLogs(false); }, 3000);
 </script>
 </body>
 </html>
