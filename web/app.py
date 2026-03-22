@@ -14,6 +14,7 @@ PROJECT_DIR = Path(os.getenv("PROJECT_DIR", "/data/project"))
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
 CRON_FILE = Path(os.getenv("CRON_FILE", "/data/cron/cfip.cron"))
 LOG_FILE = Path(os.getenv("LOG_FILE", "/data/logs/cron.log"))
+INIT_LOG_FILE = Path("/data/logs/init-mcis.log")
 PORT = int(os.getenv("PORT", "9527"))
 RUN_CMD = "/opt/cfipup2dns/cfip.sh"
 BEST_IP_FILES = {
