@@ -13,7 +13,7 @@ COPY cfip_runner.py ./
 COPY docker ./docker
 COPY web ./web
 
-RUN chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh
+RUN chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh /opt/cfipup2dns/docker/init-mcis.sh
 
 ENV TZ=Asia/Shanghai \
     PORT=9527 \
@@ -28,4 +28,3 @@ EXPOSE 9527
 VOLUME ["/data"]
 
 ENTRYPOINT ["/opt/cfipup2dns/docker/entrypoint.sh"]
-cfipup2dns/docker/entrypoint.sh"]
