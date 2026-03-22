@@ -1,0 +1,20 @@
+services:
+  cfipup2dns:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APT_MIRROR: mirrors.ustc.edu.cn
+    container_name: cfipup2dns
+    restart: unless-stopped
+    ports:
+      - "9527:9527"
+    environment:
+      TZ: Asia/Shanghai
+      PORT: 9527
+      PROJECT_DIR: /data/project
+      CONFIG_FILE: /data/project/config.json
+      GH_PROXY: https://gh-proxy.com/
+      MCIS_TAG: v0.2.3
+    volumes:
+      - ./data:/data

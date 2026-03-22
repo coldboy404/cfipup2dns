@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cfipup2dns WebUI</title>
+  <style>
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial; max-width: 960px; margin: 20px auto; padding: 0 12px; }
+    textarea,input,select,button { width: 100%; margin: 6px 0; padding: 8px; box-sizing: border-box; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 12px 0; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    pre { background: #111; color: #0f0; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>cfipup2dns 控制台</h2>
+  <p>作者：coldboy404 ｜ 说明：Cloudflare 优选 IP 自动更新面板（国内服务器友好版）</p>
+
+  <div class="card">
+    <h3>Cloudflare 配置</h3>
+    <textarea id="cfg" rows="12">{{ cfg | tojson(indent=2) }}</textarea>
+    <button onclick="saveConfig()">保存配置</button>
+  </div>
+
+  <div class="card">
+    <h3>立即执行</h3>
+    <div class="row">
+      <select id="ipMode">
+        <option value="both">both (IPv4 + IPv6)</option>
+        <option value="4">4 (仅 IPv4)</option>
+        <option value="6">6 (仅 IPv6)</option>
+      </select>
+      <input id="topN" type="number" min="1" value="5" />
+    </div>
+    <button onclick="runNow()">立即运行</button>
+    <pre id="runOutput">等待执行...</pre>
+  </div>
+
+  <div class="card">
+    <h3>定时任务（crontab）</h3>
+    <textarea id="cron" rows="8">{{ cron_text }}</textarea>
+    <button onclick="saveCron()">保存定时任务</button>
+  </div>
+
+  <div class="card">
+    <h3>运行日志</h3>
+    <button onclick="loadLogs()">刷新日志</button>
+    <pre id="logs">加载中...</pre>
+  </div>
+
+<script>
+async function saveConfig() {
+  const txt = document.getElementById('cfg').value;
+  let data;
+  try { data = JSON.parse(txt); } catch (e) { return alert('JSON 格式错误: ' + e.message); }
+  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+  const j = await r.json();
+  alert(j.ok ? '配置已保存' : '保存失败');
+}
+
+async function runNow() {
+  const ip_mode = document.getElementById('ipMode').value;
+  const top_n = Number(document.getElementById('topN').value || 5);
+  const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip_mode, top_n})});
+  const j = await r.json();
+  document.getElementById('runOutput').textContent = (j.ok ? '[OK]\n' : '[FAIL]\n') + (j.stdout || '') + '\n' + (j.stderr || '');
+}
+
+async function loadLogs() {
+  const r = await fetch('/api/logs');
+  const j = await r.json();
+  document.getElementById('logs').textContent = j.logs || '';
+}
+
+async function saveCron() {
+  const content = document.getElementById('cron').value;
+  const r = await fetch('/api/cron', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content})});
+  const j = await r.json();
+  alert(j.ok ? '定时任务已更新' : ('更新失败: ' + (j.stderr || j.error || '')));
+}
+
+loadLogs();
+</script>
+</body>
+</html>

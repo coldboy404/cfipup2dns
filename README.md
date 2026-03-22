@@ -1,132 +1,148 @@
 # cfipup2dns
 
-专为国内网络环境优化的 Cloudflare 优选 IP 自动 DDNS 工具。  
-基于 `montecarlo-ip-searcher`，自动筛选最快 IP 并更新到 Cloudflare DNS。
+一个面向国内服务器环境的 **Cloudflare 优选 IP 自动 DDNS** 项目，现已支持：
+
+- ✅ Docker 一体化部署
+- ✅ WebUI 图形管理（默认端口 `9527`）
+- ✅ 定时任务管理（cron）
+- ✅ 手动一键执行优选
+- ✅ 日志在线查看
+- ✅ 国内加速源默认启用（APT 镜像 + GitHub 代理）
 
 ---
 
-## 一键部署（最简单）
+## 项目主页
 
-在服务器 SSH 里直接执行：
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh)"
-```
-
-如果访问 GitHub 慢：
-
-```bash
-bash -c "$(curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/menu.sh)"
-```
-
-> 会直接进入交互菜单，按数字选择即可。
+- GitHub: https://github.com/coldboy404/cfipup2dns
 
 ---
 
-## 命令说明
+## 快速开始（Docker Compose）
 
-安装后提供：
+> 适合国内机器，默认已经配置了加速源。
 
-- `cfip-run`：直接执行优选
-- `cfip`：交互菜单管理
-- `cfip-menu`：菜单别名（兼容）
+```bash
+git clone https://github.com/coldboy404/cfipup2dns.git
+cd cfipup2dns
+docker compose up -d --build
+```
+
+启动后访问：
+
+- `http://你的服务器IP:9527`
 
 ---
 
-## 默认行为
+## 目录结构
 
-`cfip-run` 默认执行双栈优选（5 个 IPv4 + 5 个 IPv6）。
-
-默认参数（可用环境变量覆盖）：
-- `BUDGET=3000`
-- `ROUNDS=4`
-- `TIMEOUT=3s`
-- `TOP_TEST=50`
-- `DOWNLOAD_TOP=20`
-
-等价于：
-
-```bash
-IP_MODE=both TOP_N=5 cfip-run
-```
-
----
-
-## 定时任务（默认开启）
-
-安装完成后默认写入：
-
-```cron
-0 */2 * * * IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/cron.log 2>&1
-@reboot sleep 60 && IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> /opt/montecarlo-ip-searcher/boot.log 2>&1
-```
-
-你可以在菜单里用 **4) 更改定时任务** 自定义：
-- 运行间隔（每几小时）
-- 优选类型（4 / 6 / both）
-- 写入数量（TOP_N）
-
----
-
-## 菜单功能
-
-```bash
-cfip
-```
-
-支持：
-1. 安装 / 更新
-2. 修改 Cloudflare 配置
-3. 立即运行一次优选
-4. 更改定时任务
-5. 查看状态
-6. 卸载
-
----
-
-## 常用参数（环境变量）
-
-```bash
-IP_MODE=both   # 4 / 6 / both
-TOP_N=5        # 每个模式写入数量
-TOP_TEST=50
-CONCURRENCY=200
-BUDGET=3000
-TIMEOUT=3s
-
-DOWNLOAD_TOP=20
-DOWNLOAD_BYTES=50000000
-DOWNLOAD_TIMEOUT=45s
-DOWNLOAD_URL=https://example.com/large.bin
-
-ROUNDS=4
-SKIP_FIRST=1
-```
-
-示例：
-
-```bash
-# 默认双栈 5+5
-cfip-run
-
-# 仅 IPv4，写3条
-IP_MODE=4 TOP_N=3 cfip-run
-
-# 仅 IPv6，写3条
-IP_MODE=6 TOP_N=3 cfip-run
+```text
+cfipup2dns/
+├─ cfip.sh
+├─ config.example.json
+├─ Dockerfile
+├─ docker-compose.yml
+├─ docker/
+│  ├─ entrypoint.sh
+│  └─ init-mcis.sh
+└─ web/
+   ├─ app.py
+   ├─ templates/index.html
+   └─ static/
 ```
 
 ---
 
-## 配置文件
+## WebUI 功能
 
-```bash
-/opt/montecarlo-ip-searcher/config.json
+### 1) Cloudflare 配置
+可直接编辑并保存 `config.json`，主要字段：
+
+- `cloudflare.token`
+- `cloudflare.zone_id`
+- `cloudflare.domain`
+- `cloudflare.ttl`
+- `cloudflare.proxied`
+
+### 2) 立即运行
+支持手动触发：
+
+- `IP_MODE=4`（仅 IPv4）
+- `IP_MODE=6`（仅 IPv6）
+- `IP_MODE=both`（双栈）
+
+并可设置 `TOP_N`。
+
+### 3) 定时任务
+可在页面直接改 crontab，并即时生效。
+
+### 4) 日志查看
+在线查看最近运行日志，便于排查。
+
+---
+
+## 默认端口
+
+- 容器内：`9527`
+- 映射端口：`9527:9527`
+
+如果要改端口，修改 `docker-compose.yml`：
+
+```yaml
+ports:
+  - "9527:9527"
+environment:
+  PORT: 9527
 ```
 
-字段：
-- `token`
-- `zone_id`
-- `domain`
-- `ttl`（默认 60）
-- `proxied`（默认 false）
+---
+
+## 国内加速说明
+
+默认使用以下加速策略：
+
+- Debian APT 镜像：`mirrors.ustc.edu.cn`
+- GitHub 下载代理：`https://gh-proxy.com/`
+
+可通过环境变量自定义：
+
+```yaml
+environment:
+  GH_PROXY: https://gh-proxy.com/
+  MCIS_TAG: v0.2.3
+```
+
+---
+
+## 数据持久化
+
+`docker-compose.yml` 默认挂载：
+
+- `./data:/data`
+
+其中包括：
+
+- 配置文件：`/data/project/config.json`
+- cron 配置：`/data/cron/cfip.cron`
+- 日志目录：`/data/logs/`
+
+---
+
+## 常用命令
+
+```bash
+# 查看日志
+docker compose logs -f
+
+# 重建并启动
+docker compose up -d --build
+
+# 停止
+docker compose down
+```
+
+---
+
+## 作者与说明
+
+- 作者：**coldboy404**
+- 说明：本项目用于 Cloudflare DNS 优选 IP 自动更新，重点优化国内服务器部署体验。
