@@ -9,6 +9,8 @@ PORT="${PORT:-9527}"
 
 mkdir -p "$PROJECT_DIR" "$(dirname "$CRON_FILE")" "$LOG_DIR"
 
+/opt/cfipup2dns/docker/init-mcis.sh
+
 if [ ! -f "$CONFIG_FILE" ]; then
   cp /opt/cfipup2dns/config.example.json "$CONFIG_FILE"
 fi

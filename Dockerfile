@@ -1,4 +1,4 @@
-FROM golang:1.24-bookworm AS go-toolchain
+FROM golang:1.25.5-bookworm AS go-toolchain
 
 FROM python:3.11-slim
 
@@ -28,3 +28,4 @@ EXPOSE 9527
 VOLUME ["/data"]
 
 ENTRYPOINT ["/opt/cfipup2dns/docker/entrypoint.sh"]
+cfipup2dns/docker/entrypoint.sh"]

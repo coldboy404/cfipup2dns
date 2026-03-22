@@ -66,80 +66,22 @@ def mcis_supports_flag(mcis_bin, flag_name):
         return False
 
 
-def build_mcis_from_source(mcis_bin, version_file):
-    PROJECT_DIR.mkdir(parents=True, exist_ok=True)
-    arch = os.uname().machine
-    if arch in ("x86_64", "amd64"):
-        goarch = "amd64"
-    elif arch in ("aarch64", "arm64"):
-        goarch = "arm64"
-    else:
-        raise RuntimeError(f"不支持的架构: {arch}")
-
-    log(f"[*] 开始同步上游源码并编译 mcis: {MCIS_REF}")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        repo_dir = td_path / "repo"
-
-        if MCIS_REF == "main":
-            raw_tar = "https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/heads/main.tar.gz"
-            tgz = td_path / "main.tar.gz"
-            fetch_with_fallback(raw_tar, tgz, timeout=120)
-            with tarfile.open(tgz, "r:gz") as tar:
-                tar.extractall(td_path)
-            extracted = td_path / "montecarlo-ip-searcher-main"
-        else:
-            raw_tar = f"https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/tags/{MCIS_REF}.tar.gz"
-            tgz = td_path / f"{MCIS_REF}.tar.gz"
-            fetch_with_fallback(raw_tar, tgz, timeout=120)
-            with tarfile.open(tgz, "r:gz") as tar:
-                tar.extractall(td_path)
-            extracted = td_path / f"montecarlo-ip-searcher-{MCIS_REF.lstrip('v')}"
-
-        if not extracted.exists():
-            raise RuntimeError(f"未找到解压后的上游源码目录: {extracted}")
-        extracted.rename(repo_dir)
-
-        env = os.environ.copy()
-        env["CGO_ENABLED"] = "0"
-        env["GOOS"] = "linux"
-        env["GOARCH"] = goarch
-        out_bin = td_path / "mcis-built"
-        proc = subprocess.run(
-            ["go", "build", "-trimpath", "-ldflags", "-s -w", "-o", str(out_bin), "./cmd/mcis"],
-            cwd=repo_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"源码编译 mcis 失败: {proc.stdout}\n{proc.stderr}")
-
-        shutil.copy2(out_bin, mcis_bin)
-        mcis_bin.chmod(0o755)
-        version_file.write_text(f"{MCIS_REF}+source", encoding="utf-8")
-        log(f"[✓] 已完成上游源码同步并编译 mcis: {MCIS_REF}")
-
-
 def ensure_mcis():
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     mcis_bin = PROJECT_DIR / "montecarlo-ip-searcher"
     version_file = PROJECT_DIR / ".mcis_version"
+    if not mcis_bin.exists():
+        raise RuntimeError("mcis 未初始化，请先重建/重启容器完成预编译")
     current_version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
-    wanted_version = f"{MCIS_REF}+source"
-
-    if (not mcis_bin.exists()) or current_version != wanted_version:
-        build_mcis_from_source(mcis_bin, version_file)
-
+    if current_version != f"{MCIS_REF}+source":
+        log(f"[!] 当前 mcis 版本标记为: {current_version or 'unknown'}，目标: {MCIS_REF}+source")
     if not mcis_supports_flag(mcis_bin, "-download-mode"):
-        raise RuntimeError("当前从上游同步编译出的 mcis 仍不支持 -download-mode，请检查上游源码是否变更")
-
+        raise RuntimeError("当前 mcis 不支持 -download-mode，请先在容器初始化阶段完成正确编译")
     for name in ("ipv4cidr.txt", "ipv6cidr.txt"):
         p = PROJECT_DIR / name
         if not p.exists() or p.stat().st_size == 0:
             raw = f"https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/{name}"
             fetch_with_fallback(raw, p, timeout=60)
-
     return mcis_bin
 
 

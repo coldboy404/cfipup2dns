@@ -431,6 +431,13 @@ class Handler(BaseHTTPRequestHandler):
             ok = trigger_run(env)
             return json_response(self, {"ok": ok, "running": LAST_RUN["running"]})
 
+        if path == "/api/logs/clear":
+            if LOG_FILE.exists():
+                LOG_FILE.write_text("", encoding="utf-8")
+            LAST_RUN["stdout"] = ""
+            LAST_RUN["stderr"] = ""
+            return json_response(self, {"ok": True})
+
         return json_response(self, {"ok": False, "error": "not found"}, 404)
 
     def log_message(self, format, *args):

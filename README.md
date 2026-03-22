@@ -97,10 +97,11 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 当前策略已改为直接跟随上游源码能力：
 
 - 默认同步上游 `Leo-Mu/montecarlo-ip-searcher` 的 **`main` 分支源码**
-- 容器内直接本地编译 `mcis`
+- 在**容器启动初始化阶段**预编译 `mcis`
+- 运行任务阶段只负责扫描与更新 DNS，不再临时下载源码/编译
 - 明确启用 `--download-mode sequential`
 
-这样可以避免 release 包能力滞后，确保优先拿到上游最新参数与实现。
+这样可以避免 release 包能力滞后，也能减少运行时因网络波动导致的失败。
 
 ---
 

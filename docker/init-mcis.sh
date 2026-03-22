@@ -1,41 +1,94 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 PROJECT_DIR="${PROJECT_DIR:-/data/project}"
-GH_PROXY="${GH_PROXY:-https://gh-proxy.com/}"
-MCIS_TAG="${MCIS_TAG:-v0.2.3}"
+GH_PROXY="${GH_PROXY:-https://gh-proxy.org/}"
+MCIS_REF="${MCIS_REF:-main}"
+MCIS_BIN="$PROJECT_DIR/montecarlo-ip-searcher"
+MCIS_VERSION_FILE="$PROJECT_DIR/.mcis_version"
+WANTED_VERSION="${MCIS_REF}+source"
+
+log() {
+  printf '%s\n' "$1"
+}
+
+fetch() {
+  url="$1"
+  dest="$2"
+  python3 - "$url" "$dest" <<'PY'
+import shutil, sys, urllib.request
+url, dest = sys.argv[1], sys.argv[2]
+req = urllib.request.Request(url, headers={"User-Agent": "cfipup2dns/2.0"})
+with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+    shutil.copyfileobj(resp, f)
+PY
+}
+
+fetch_with_fallback() {
+  raw_url="$1"
+  dest="$2"
+  if [ -n "$GH_PROXY" ]; then
+    if fetch "${GH_PROXY}${raw_url}" "$dest"; then
+      return 0
+    fi
+    log "[!] 代理下载失败，回退直连"
+  fi
+  fetch "$raw_url" "$dest"
+}
+
+need_build=1
+if [ -x "$MCIS_BIN" ] && [ -f "$MCIS_VERSION_FILE" ]; then
+  current="$(cat "$MCIS_VERSION_FILE" 2>/dev/null || true)"
+  if [ "$current" = "$WANTED_VERSION" ]; then
+    need_build=0
+  fi
+fi
 
 mkdir -p "$PROJECT_DIR"
 
-arch="$(uname -m)"
-case "$arch" in
-  x86_64|amd64) mcis_arch="amd64" ;;
-  aarch64|arm64) mcis_arch="arm64" ;;
-  *) echo "Unsupported arch: $arch"; exit 1 ;;
-esac
+if [ "$need_build" = "1" ]; then
+  log "[*] 初始化 mcis：同步上游源码并预编译 -> $MCIS_REF"
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' EXIT INT TERM
+  tarball="$tmpdir/src.tar.gz"
 
-mcis_bin="$PROJECT_DIR/montecarlo-ip-searcher"
-if [[ ! -x "$mcis_bin" ]]; then
-  pkg="mcis-${MCIS_TAG}-linux-${mcis_arch}.tar.gz"
-  raw_url="https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/${MCIS_TAG}/${pkg}"
-  proxy_url="${GH_PROXY}${raw_url}"
+  if [ "$MCIS_REF" = "main" ]; then
+    raw_tar="https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/heads/main.tar.gz"
+    extracted="$tmpdir/montecarlo-ip-searcher-main"
+  else
+    raw_tar="https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/tags/${MCIS_REF}.tar.gz"
+    extracted="$tmpdir/montecarlo-ip-searcher-${MCIS_REF#v}"
+  fi
 
-  tmp_tgz="/tmp/${pkg}"
-  curl -fL --connect-timeout 8 --max-time 120 "$proxy_url" -o "$tmp_tgz" \
-    || curl -fL --connect-timeout 8 --max-time 120 "$raw_url" -o "$tmp_tgz"
+  fetch_with_fallback "$raw_tar" "$tarball"
+  tar -xzf "$tarball" -C "$tmpdir"
 
-  tar -xzf "$tmp_tgz" -C "$PROJECT_DIR"
-  rm -f "$tmp_tgz"
-  mv -f "$PROJECT_DIR/mcis" "$mcis_bin"
-  chmod +x "$mcis_bin"
+  export CGO_ENABLED=0
+  export GOTOOLCHAIN=local
+  export GOOS=linux
+  case "$(uname -m)" in
+    x86_64|amd64) export GOARCH=amd64 ;;
+    aarch64|arm64) export GOARCH=arm64 ;;
+    *) log "[错误] 不支持的架构: $(uname -m)"; exit 1 ;;
+  esac
+
+  (cd "$extracted" && go build -trimpath -ldflags '-s -w' -o "$MCIS_BIN" ./cmd/mcis) || {
+    log "[错误] 初始化编译 mcis 失败"
+    exit 1
+  }
+  chmod +x "$MCIS_BIN"
+  printf '%s' "$WANTED_VERSION" > "$MCIS_VERSION_FILE"
+  log "[✓] mcis 预编译完成: $WANTED_VERSION"
 fi
 
-if [[ ! -s "$PROJECT_DIR/ipv4cidr.txt" ]]; then
-  raw4="https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt"
-  curl -fL "${GH_PROXY}${raw4}" -o "$PROJECT_DIR/ipv4cidr.txt" || curl -fL "$raw4" -o "$PROJECT_DIR/ipv4cidr.txt"
-fi
+for name in ipv4cidr.txt ipv6cidr.txt; do
+  path="$PROJECT_DIR/$name"
+  if [ ! -s "$path" ]; then
+    fetch_with_fallback "https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/$name" "$path"
+  fi
+done
 
-if [[ ! -s "$PROJECT_DIR/ipv6cidr.txt" ]]; then
-  raw6="https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt"
-  curl -fL "${GH_PROXY}${raw6}" -o "$PROJECT_DIR/ipv6cidr.txt" || curl -fL "$raw6" -o "$PROJECT_DIR/ipv6cidr.txt"
-fi
+"$MCIS_BIN" -h | grep -q -- '-download-mode' || {
+  log "[错误] 当前 mcis 不支持 -download-mode"
+  exit 1
+}

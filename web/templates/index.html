@@ -323,6 +323,15 @@ async function loadLogs(force = false) {
   if (shouldStickBottom) el.scrollTop = el.scrollHeight;
 }
 
+async function clearLogs() {
+  const ok = confirm('确定要清除当前日志吗？');
+  if (!ok) return;
+  const r = await fetch('/api/logs/clear', { method: 'POST' });
+  const j = await r.json();
+  if (!j.ok) return alert('清除失败');
+  await loadLogs(true);
+}
+
 async function loadStatus() {
   const r = await fetch('/api/status');
   const j = await r.json();
