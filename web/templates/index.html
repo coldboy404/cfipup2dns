@@ -274,8 +274,7 @@ function renderRunStateMeta(updatedAt, nextRunAt) {
 function renderBestIps(items) {
   const root = document.getElementById('bestIps');
   if (!items || !items.length) {
-    root.innerHTML = '<div class="status">暂无优选 IP</div>';
-    return;
+    return false;
   }
   root.innerHTML = items.map(item => {
     const speed = Number(item.download_mbps || 0);
@@ -287,13 +286,17 @@ function renderBestIps(items) {
     ].filter(Boolean).join('');
     return `<div class="ip-item"><div class="ip-main"><code>${item.ip}</code></div><div class="ip-tags">${tags}</div></div>`;
   }).join('');
+  return true;
 }
 
 async function loadBestIps() {
   const r = await fetch('/api/best-ips');
   const j = await r.json();
   renderRunStateMeta(j.updated_at, j.next_run_at);
-  renderBestIps(j.result || []);
+  const updated = renderBestIps(j.result || []);
+  if (!updated) {
+    // 保持上一次显示的优选 IP，不用空数据覆盖
+  }
 }
 
 async function runNow() {

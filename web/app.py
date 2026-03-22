@@ -5,7 +5,9 @@ import os
 import subprocess
 import threading
 import time
-from datetime import datetime
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -31,6 +33,103 @@ LAST_RUN = {
     "ended_at": None,
     "selected_ips": [],
 }
+
+DNS_CACHE = {
+    "items": [],
+    "updated_at": None,
+    "fetched_at": None,
+    "error": None,
+}
+DNS_CACHE_TTL = int(os.getenv("DNS_CACHE_TTL", "120"))
+
+
+def _cf_request(method, path, token):
+    url = f"https://api.cloudflare.com/client/v4{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "cfipup2dns-web/2.0",
+    }
+    req = urllib.request.Request(url, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        obj = json.loads(resp.read().decode("utf-8"))
+    if not obj.get("success"):
+        raise RuntimeError(json.dumps(obj, ensure_ascii=False))
+    return obj
+
+
+def _load_best_ips_from_file():
+    items = []
+    updated_at = None
+    for version, path in BEST_IP_FILES.items():
+        if not path.exists():
+            continue
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for row in obj.get("result", []) or []:
+            ip = row.get("ip")
+            if not ip:
+                continue
+            items.append(normalize_ip_row(version, row))
+        ts = path.stat().st_mtime
+        if updated_at is None or ts > updated_at:
+            updated_at = ts
+    return {"items": items, "updated_at": updated_at}
+
+
+def _load_best_ips_from_dns():
+    cfg = load_config()
+    cf = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
+    token = str(cf.get("token", "") or "").strip()
+    zone_id = str(cf.get("zone_id", "") or "").strip()
+    domain = str(cf.get("domain", "") or "").strip()
+    if not token or not zone_id or not domain:
+        return {"items": [], "updated_at": None}
+    items = []
+    updated_at = None
+    for dns_type, version in (("A", "4"), ("AAAA", "6")):
+        q = f"type={dns_type}&name={domain}"
+        data = _cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
+        for rec in data.get("result", []) or []:
+            ip = rec.get("content")
+            if not ip:
+                continue
+            items.append({
+                "version": version,
+                "ip": ip,
+                "latency_ms": None,
+                "download_mbps": None,
+            })
+            modified = rec.get("modified_on") or rec.get("created_on")
+            if modified:
+                try:
+                    ts = datetime.fromisoformat(modified.replace("Z", "+00:00")).timestamp()
+                    if updated_at is None or ts > updated_at:
+                        updated_at = ts
+                except Exception:
+                    pass
+    return {"items": items, "updated_at": updated_at}
+
+
+def get_selected_ips():
+    now = time.time()
+    if DNS_CACHE["fetched_at"] and now - DNS_CACHE["fetched_at"] < DNS_CACHE_TTL:
+        return {"items": DNS_CACHE["items"], "updated_at": DNS_CACHE["updated_at"], "error": DNS_CACHE["error"]}
+    data = _load_best_ips_from_file()
+    if not data["items"]:
+        try:
+            data = _load_best_ips_from_dns()
+            DNS_CACHE["error"] = None
+        except Exception as e:
+            DNS_CACHE["error"] = str(e)
+    DNS_CACHE.update({
+        "items": data["items"],
+        "updated_at": data["updated_at"],
+        "fetched_at": now,
+    })
+    return {"items": DNS_CACHE["items"], "updated_at": DNS_CACHE["updated_at"], "error": DNS_CACHE["error"]}
 
 
 def load_html():
@@ -196,6 +295,38 @@ def save_cron_text(content):
     return content
 
 
+def next_run_time(now_ts=None):
+    if not CRON_FILE.exists():
+        return None
+    try:
+        lines = CRON_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None
+    now = datetime.now() if now_ts is None else datetime.fromtimestamp(now_ts)
+    candidates = []
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("SHELL=") or s.startswith("PATH="):
+            continue
+        if s.startswith("@reboot"):
+            continue
+        parts = s.split(None, 5)
+        if len(parts) < 6:
+            continue
+        minute, hour, day, month, weekday, command = parts
+        if RUN_CMD not in command:
+            continue
+        for i in range(0, 24 * 60 + 1):
+            cand = now + timedelta(minutes=i)
+            py_weekday = (cand.weekday() + 1) % 7
+            if parse_cron_field(minute, cand.minute) and parse_cron_field(hour, cand.hour) and parse_cron_field(day, cand.day) and parse_cron_field(month, cand.month) and parse_cron_field(weekday, py_weekday):
+                candidates.append(cand)
+                break
+    if not candidates:
+        return None
+    return min(candidates).timestamp()
+
+
 def normalize_ip_row(version, row):
     latency = row.get("latency_ms")
     if latency in (None, ""):
@@ -209,20 +340,7 @@ def normalize_ip_row(version, row):
 
 
 def load_selected_ips():
-    items = []
-    for version, path in BEST_IP_FILES.items():
-        if not path.exists():
-            continue
-        try:
-            obj = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        for row in obj.get("result", []) or []:
-            ip = row.get("ip")
-            if not ip:
-                continue
-            items.append(normalize_ip_row(version, row))
-    return items
+    return get_selected_ips()
 
 
 def render_index():
@@ -353,13 +471,15 @@ def run_job(env):
     finally:
         if proc.stdout is not None:
             proc.stdout.close()
+    # 执行完成后立刻刷新缓存，确保前端马上看到最新结果
+    DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None})
     LAST_RUN.update({
         "running": False,
         "code": code,
         "stdout": "".join(chunks)[-16000:],
         "stderr": "",
         "ended_at": time.time(),
-        "selected_ips": load_selected_ips(),
+        "selected_ips": get_selected_ips()["items"],
     })
     append_log(f"===== {datetime.now().isoformat()} 执行结束，退出码={code} =====\n")
 
@@ -393,7 +513,12 @@ class Handler(BaseHTTPRequestHandler):
             combined = "\n\n".join([p for p in [live_logs, init_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
-            return json_response(self, {"ok": True, **LAST_RUN, "next_run_at": next_run_time()})
+            selected = get_selected_ips()
+            payload = {"ok": True, **LAST_RUN, "next_run_at": next_run_time()}
+            payload["selected_ips"] = selected["items"]
+            payload["selected_ips_updated_at"] = selected["updated_at"]
+            payload["dns_error"] = selected.get("error")
+            return json_response(self, payload)
         if path == "/api/config":
             cfg = load_config()
             return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
@@ -401,12 +526,13 @@ class Handler(BaseHTTPRequestHandler):
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
             return json_response(self, {"ok": True, "schedule": cron_state(raw)})
         if path == "/api/best-ips":
-            selected = load_selected_ips()
+            selected = get_selected_ips()
             return json_response(self, {
                 "ok": True,
                 "result": selected["items"],
                 "updated_at": selected["updated_at"],
                 "next_run_at": next_run_time(),
+                "dns_error": selected.get("error"),
             })
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
 
