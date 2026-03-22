@@ -20,7 +20,7 @@ ENV TZ=Asia/Shanghai \
     CRON_FILE=/data/cron/cfip.cron \
     LOG_FILE=/data/logs/cron.log \
     GH_PROXY=https://gh-proxy.org/ \
-    MCIS_TAG=v0.2.4
+    MCIS_REF=main
 
 EXPOSE 9527
 VOLUME ["/data"]

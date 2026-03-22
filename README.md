@@ -94,13 +94,13 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 - 结果持久化
 - 面板化展示
 
-当前已借鉴上游的新改动：
+当前策略已改为直接跟随上游源码能力：
 
-- 上游版本目标升级到 **v0.2.4**
-- 接入 `--download-mode sequential`
-- 当 release 二进制不包含 `download-mode` 能力时，容器会自动回退为 **从上游源码编译对应 tag**，尽量保持与上游能力同步
+- 默认同步上游 `Leo-Mu/montecarlo-ip-searcher` 的 **`main` 分支源码**
+- 容器内直接本地编译 `mcis`
+- 明确启用 `--download-mode sequential`
 
-这样在测速阶段通常比一次性把前 N 个全部测速更省时间，尤其适合失败率较高或网络抖动时。
+这样可以避免 release 包能力滞后，确保优先拿到上游最新参数与实现。
 
 ---
 
