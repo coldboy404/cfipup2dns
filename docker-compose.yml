@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: docker.m.daocloud.io/library/debian:bookworm-slim
-        APT_MIRROR: mirrors.ustc.edu.cn
+        BASE_IMAGE: registry.cn-hangzhou.aliyuncs.com/acs/debian:bookworm-slim
+        APT_MIRROR: mirrors.aliyun.com
     container_name: cfipup2dns
     restart: unless-stopped
     ports:
