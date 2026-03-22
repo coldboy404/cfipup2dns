@@ -1,4 +1,5 @@
-FROM debian:bookworm-slim
+ARG BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
+FROM ${BASE_IMAGE}
 
 ARG APT_MIRROR=mirrors.ustc.edu.cn
 RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
@@ -20,7 +21,7 @@ ENV TZ=Asia/Shanghai \
     PORT=9527 \
     PROJECT_DIR=/data/project \
     CONFIG_FILE=/data/project/config.json \
-    GH_PROXY=https://gh-proxy.com/
+    GH_PROXY=https://gh-proxy.org/
 
 EXPOSE 9527
 VOLUME ["/data"]

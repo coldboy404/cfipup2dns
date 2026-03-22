@@ -172,15 +172,22 @@ environment:
 
 默认使用以下加速策略：
 
+- Docker 基础镜像：`docker.m.daocloud.io/library/debian:bookworm-slim`
 - Debian APT 镜像：`mirrors.ustc.edu.cn`
-- GitHub 下载代理：`https://gh-proxy.com/`
+- GitHub 下载代理：`https://gh-proxy.org/`
 
-可通过环境变量自定义：
+可通过 compose 自定义：
 
 ```yaml
-environment:
-  GH_PROXY: https://gh-proxy.com/
-  MCIS_TAG: v0.2.3
+services:
+  cfipup2dns:
+    build:
+      args:
+        BASE_IMAGE: docker.m.daocloud.io/library/debian:bookworm-slim
+        APT_MIRROR: mirrors.ustc.edu.cn
+    environment:
+      GH_PROXY: https://gh-proxy.org/
+      MCIS_TAG: v0.2.3
 ```
 
 ---
