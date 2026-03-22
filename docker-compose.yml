@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: docker.m.daocloud.io/library/debian:bookworm-slim
-        APT_MIRROR: mirrors.aliyun.com
+        BASE_IMAGE: ${BASE_IMAGE:-docker.m.daocloud.io/library/debian:bookworm-slim}
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
     container_name: cfipup2dns
     restart: unless-stopped
     ports:
@@ -19,4 +19,3 @@ services:
       MCIS_TAG: ${MCIS_TAG:-v0.2.3}
     volumes:
       - ./data:/data
-ata

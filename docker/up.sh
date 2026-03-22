@@ -28,7 +28,7 @@ pull_with_retry() {
   local image="$1"
   local ok=1
   for i in 1 2 3; do
-    if docker pull "$image"; then
+    if docker pull "$image" >&2; then
       ok=0
       break
     fi
@@ -45,7 +45,7 @@ pick_base_image() {
 
   local img
   for img in "${IMAGE_CANDIDATES[@]}"; do
-    echo "[fallback] try base image: $img"
+    echo "[fallback] try base image: $img" >&2
     if pull_with_retry "$img"; then
       echo "$img"
       return 0
