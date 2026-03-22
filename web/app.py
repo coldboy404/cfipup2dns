@@ -438,6 +438,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logs/clear":
             if LOG_FILE.exists():
                 LOG_FILE.write_text("", encoding="utf-8")
+            if INIT_LOG_FILE.exists():
+                INIT_LOG_FILE.write_text("", encoding="utf-8")
             LAST_RUN["stdout"] = ""
             LAST_RUN["stderr"] = ""
             return json_response(self, {"ok": True})
