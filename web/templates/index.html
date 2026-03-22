@@ -49,6 +49,7 @@
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
     .toolbar > * { flex: 1; min-width: 140px; }
     .status { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); }
+    .hint { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); line-height: 1.7; }
     .ip-list { display: grid; gap: 10px; }
     .ip-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.64); }
     .ip-main { margin-bottom: 8px; }
@@ -256,6 +257,18 @@ function formatNumber(v) {
   const n = Number(v);
   if (Number.isNaN(n)) return '';
   return String(Math.round(n));
+}
+
+function formatDateTime(v) {
+  if (!v) return '--';
+  const d = new Date(Number(v) * 1000);
+  if (Number.isNaN(d.getTime())) return '--';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}-${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderBestIpsMeta(updatedAt, nextRunAt) {
+  document.getElementById('bestIpsMeta').innerHTML = `优选 IP 时间：${formatDateTime(updatedAt)}<br>下次运行时间：${formatDateTime(nextRunAt)}`;
 }
 
 function renderBestIps(items) {

@@ -401,7 +401,13 @@ class Handler(BaseHTTPRequestHandler):
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
             return json_response(self, {"ok": True, "schedule": cron_state(raw)})
         if path == "/api/best-ips":
-            return json_response(self, {"ok": True, "result": load_selected_ips()})
+            selected = load_selected_ips()
+            return json_response(self, {
+                "ok": True,
+                "result": selected["items"],
+                "updated_at": selected["updated_at"],
+                "next_run_at": next_run_time(),
+            })
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
 
     def do_POST(self):
