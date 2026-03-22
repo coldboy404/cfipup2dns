@@ -4,22 +4,21 @@ FROM ${BASE_IMAGE}
 ARG APT_MIRROR=mirrors.aliyun.com
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      cp /etc/apt/sources.list.d/debian.sources /tmp/debian.sources.bak; \
       sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://deb.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources || true; \
     elif [ -f /etc/apt/sources.list ]; then \
+      cp /etc/apt/sources.list /tmp/sources.list.bak; \
       sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list || true; \
     fi; \
-    ok=""; \
-    for i in 1 2 3; do \
-      apt-get update && ok=1 && break || sleep 3; \
-    done; \
-    test -n "$ok"; \
-    ok=""; \
-    for i in 1 2 3; do \
-      apt-get install -y --no-install-recommends \
-        bash curl jq cron ca-certificates tzdata procps \
-        python3 python3-flask && ok=1 && break || sleep 3; \
-    done; \
-    test -n "$ok"; \
+    if ! apt-get -o Acquire::Retries=5 update; then \
+      if [ -f /tmp/debian.sources.bak ]; then cp /tmp/debian.sources.bak /etc/apt/sources.list.d/debian.sources; fi; \
+      if [ -f /tmp/sources.list.bak ]; then cp /tmp/sources.list.bak /etc/apt/sources.list; fi; \
+      apt-get -o Acquire::Retries=5 update; \
+    fi; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      bash curl jq cron ca-certificates tzdata procps \
+      python3 python3-flask; \
+    rm -f /tmp/debian.sources.bak /tmp/sources.list.bak; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/cfipup2dns
