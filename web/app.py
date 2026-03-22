@@ -296,10 +296,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             return text_response(self, render_index())
         if path == "/api/logs":
-            if not LOG_FILE.exists():
-                return json_response(self, {"ok": True, "logs": "(暂无日志)"})
-            logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:])
-            return json_response(self, {"ok": True, "logs": logs})
+            live_parts = []
+            if LAST_RUN.get("running"):
+                live_parts.append("[运行中] 任务正在执行，实时输出会在任务结束后完整落盘。")
+            if LAST_RUN.get("started_at"):
+                live_parts.append(f"started_at={datetime.fromtimestamp(LAST_RUN['started_at']).isoformat()}")
+            if LAST_RUN.get("ended_at"):
+                live_parts.append(f"ended_at={datetime.fromtimestamp(LAST_RUN['ended_at']).isoformat()}")
+            if LAST_RUN.get("code") is not None:
+                live_parts.append(f"exit_code={LAST_RUN['code']}")
+            if LAST_RUN.get("stdout"):
+                live_parts.append("[stdout]\n" + LAST_RUN["stdout"])
+            if LAST_RUN.get("stderr"):
+                live_parts.append("[stderr]\n" + LAST_RUN["stderr"])
+            live_logs = "\n\n".join([p for p in live_parts if p]).strip()
+
+            file_logs = ""
+            if LOG_FILE.exists():
+                file_logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:]).strip()
+
+            combined = "\n\n".join([p for p in [live_logs, file_logs] if p]).strip()
+            return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
             return json_response(self, {"ok": True, **LAST_RUN})
         if path == "/api/config":
