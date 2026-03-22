@@ -24,7 +24,7 @@
 ```bash
 git clone https://gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
-bash docker/up.sh
+docker compose up -d --build
 ```
 
 启动后访问：
@@ -33,44 +33,39 @@ bash docker/up.sh
 
 ---
 
-## Linux 通用安装 Docker（国内加速源）
+## 国内安装 Docker（加速源）
 
-> 自动识别 Debian/Ubuntu 与 CentOS/RHEL/Rocky/Alma/Fedora。
+> 适用于 Debian / Ubuntu。安装完成后可直接执行本项目的 `docker compose`。
 
-### 1) 安装 Docker CE + Compose（自动识别发行版）
+### 1) 安装 Docker CE（多镜像源可切换）
+
+可选源（按你的机器网络选一个最快的）：
+
+- `https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/ubuntu`
+- `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`
+- `https://repo.huaweicloud.com/docker-ce/linux/ubuntu`
+- `https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu`
 
 ```bash
-set -e
+# 可改成上面任意一个
+DOCKER_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/ubuntu"
 
-. /etc/os-release
-ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL "${DOCKER_APT_MIRROR}/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-# 可切换：mirrors.aliyun.com / mirrors.tuna.tsinghua.edu.cn / repo.huaweicloud.com / mirrors.ustc.edu.cn
-MIRROR_HOST="mirrors.aliyun.com"
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_APT_MIRROR} \
+  $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update
-  sudo apt-get install -y ca-certificates curl gnupg
-  sudo install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL "https://${MIRROR_HOST}/docker-ce/linux/${ID}/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  sudo chmod a+r /etc/apt/keyrings/docker.gpg
-  echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://${MIRROR_HOST}/docker-ce/linux/${ID} ${VERSION_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-  sudo apt-get update
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
-  PM="dnf"; command -v dnf >/dev/null 2>&1 || PM="yum"
-  sudo ${PM} install -y yum-utils
-  sudo ${PM}-config-manager --add-repo "https://${MIRROR_HOST}/docker-ce/linux/centos/docker-ce.repo"
-  sudo ${PM} install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-else
-  echo "Unsupported distro: $ID" && exit 1
-fi
-
-sudo systemctl enable --now docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-### 2) 配置 Docker Hub 镜像加速（推荐）
+### 2) 可选：配置 Docker Hub 镜像加速（多源）
 
 ```bash
 sudo mkdir -p /etc/docker
@@ -172,25 +167,16 @@ environment:
 
 默认使用以下加速策略：
 
-- Docker 基础镜像：`docker.m.daocloud.io/library/debian:bookworm-slim`
-- Debian APT 镜像：`mirrors.aliyun.com`
-- GitHub 下载代理：`https://gh-proxy.org/`
+- Debian APT 镜像：`mirrors.ustc.edu.cn`
+- GitHub 下载代理：`https://gh-proxy.com/`
 
-可通过环境变量自定义（`docker/up.sh` 会自动探测并 fallback）：
+可通过环境变量自定义：
 
-```bash
-BASE_IMAGE=docker.1panel.live/library/debian:bookworm-slim \
-APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
-GH_PROXY=https://ghfast.top/ \
-MCIS_TAG=v0.2.3 \
-bash docker/up.sh
+```yaml
+environment:
+  GH_PROXY: https://gh-proxy.com/
+  MCIS_TAG: v0.2.3
 ```
-
-默认 fallback 顺序：
-
-- BASE_IMAGE：`docker.1panel.live` → `docker.m.daocloud.io` → `dockerproxy.com` → `docker.io`
-- APT 镜像：`aliyun` → `tsinghua` → `ustc` → `huaweicloud`
-- GH 代理：`gh-proxy.org` → `ghfast.top` → `ghproxy.net` → 直连
 
 ---
 

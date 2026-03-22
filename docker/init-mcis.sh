@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/data/project}"
-GH_PROXY="${GH_PROXY:-https://gh-proxy.org/}"
+GH_PROXY="${GH_PROXY:-https://gh-proxy.com/}"
 MCIS_TAG="${MCIS_TAG:-v0.2.3}"
 
 mkdir -p "$PROJECT_DIR"

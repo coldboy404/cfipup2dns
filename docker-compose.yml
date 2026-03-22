@@ -4,8 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: ${BASE_IMAGE:-docker.m.daocloud.io/library/debian:bookworm-slim}
-        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
+        APT_MIRROR: mirrors.ustc.edu.cn
     container_name: cfipup2dns
     restart: unless-stopped
     ports:
@@ -15,7 +14,7 @@ services:
       PORT: 9527
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
-      GH_PROXY: ${GH_PROXY:-https://gh-proxy.org/}
-      MCIS_TAG: ${MCIS_TAG:-v0.2.3}
+      GH_PROXY: https://gh-proxy.com/
+      MCIS_TAG: v0.2.3
     volumes:
       - ./data:/data

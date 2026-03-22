@@ -1,12 +1,12 @@
-ARG BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
-FROM ${BASE_IMAGE}
+FROM debian:bookworm-slim
 
-RUN set -eux; \
-    apt-get -o Acquire::Retries=8 -o Acquire::ForceIPv4=true update; \
-    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=8 -o Acquire::ForceIPv4=true install -y --no-install-recommends \
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
       bash curl jq cron ca-certificates tzdata procps \
-      python3 python3-flask; \
-    rm -rf /var/lib/apt/lists/*
+      python3 python3-flask \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/cfipup2dns
 
@@ -20,7 +20,7 @@ ENV TZ=Asia/Shanghai \
     PORT=9527 \
     PROJECT_DIR=/data/project \
     CONFIG_FILE=/data/project/config.json \
-    GH_PROXY=https://gh-proxy.org/
+    GH_PROXY=https://gh-proxy.com/
 
 EXPOSE 9527
 VOLUME ["/data"]
