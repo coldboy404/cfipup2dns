@@ -16,8 +16,8 @@
 
 ## 项目主页
 
-- GitHub: https://github.com/coldboy404/cfipup2dns
-- 上游项目: https://github.com/Leo-Mu/montecarlo-ip-searcher
+- 本项目 GitHub: https://github.com/coldboy404/cfipup2dns
+- 原项目 / 上游项目 GitHub: https://github.com/Leo-Mu/montecarlo-ip-searcher
 
 ---
 
