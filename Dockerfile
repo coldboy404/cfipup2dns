@@ -5,10 +5,10 @@ ARG APT_MIRROR=mirrors.aliyun.com
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       cp /etc/apt/sources.list.d/debian.sources /tmp/debian.sources.bak; \
-      sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://deb.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources || true; \
+      sed -i "s|http://deb.debian.org/debian|http://${APT_MIRROR}/debian|g; s|http://deb.debian.org/debian-security|http://${APT_MIRROR}/debian-security|g; s|http://security.debian.org/debian-security|http://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources || true; \
     elif [ -f /etc/apt/sources.list ]; then \
       cp /etc/apt/sources.list /tmp/sources.list.bak; \
-      sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list || true; \
+      sed -i "s|http://deb.debian.org/debian|http://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|http://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list || true; \
     fi; \
     if ! apt-get -o Acquire::Retries=5 update; then \
       if [ -f /tmp/debian.sources.bak ]; then cp /tmp/debian.sources.bak /etc/apt/sources.list.d/debian.sources; fi; \
