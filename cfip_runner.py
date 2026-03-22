@@ -120,6 +120,15 @@ def cf_request(method, path, token, payload=None):
     return obj
 
 
+def mcis_supports_flag(mcis_bin, flag_name):
+    try:
+        res = subprocess.run([str(mcis_bin), "-h"], capture_output=True, text=True, timeout=15)
+        text = (res.stdout or "") + "\n" + (res.stderr or "")
+        return flag_name in text
+    except Exception:
+        return False
+
+
 def parse_json_lines(path):
     rows = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -175,7 +184,10 @@ def run_mode(mode, cfg, mcis_bin):
     if int(DOWNLOAD_TOP) > 0:
         args += ["-download-top", DOWNLOAD_TOP, "-download-timeout", DOWNLOAD_TIMEOUT]
         if DOWNLOAD_MODE in ("all", "sequential"):
-            args += ["-download-mode", DOWNLOAD_MODE]
+            if mcis_supports_flag(mcis_bin, "-download-mode"):
+                args += ["-download-mode", DOWNLOAD_MODE]
+            else:
+                log(f"[!] 当前 mcis 不支持 -download-mode，已自动跳过（请求值: {DOWNLOAD_MODE}）")
         if DOWNLOAD_URL:
             args += ["-download-url", DOWNLOAD_URL]
         if DOWNLOAD_BYTES:
