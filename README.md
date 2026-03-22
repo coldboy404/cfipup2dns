@@ -24,7 +24,7 @@
 ```bash
 git clone https://gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
-docker compose up -d --build
+bash docker/up.sh
 ```
 
 启动后访问：
@@ -176,19 +176,21 @@ environment:
 - Debian APT 镜像：`mirrors.aliyun.com`
 - GitHub 下载代理：`https://gh-proxy.org/`
 
-可通过 compose 自定义：
+可通过环境变量自定义（`docker/up.sh` 会自动探测并 fallback）：
 
-```yaml
-services:
-  cfipup2dns:
-    build:
-      args:
-        BASE_IMAGE: registry.cn-hangzhou.aliyuncs.com/acs/debian:bookworm-slim
-        APT_MIRROR: mirrors.aliyun.com
-    environment:
-      GH_PROXY: https://gh-proxy.org/
-      MCIS_TAG: v0.2.3
+```bash
+BASE_IMAGE=docker.1panel.live/library/debian:bookworm-slim \
+APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
+GH_PROXY=https://ghfast.top/ \
+MCIS_TAG=v0.2.3 \
+bash docker/up.sh
 ```
+
+默认 fallback 顺序：
+
+- BASE_IMAGE：`docker.1panel.live` → `docker.m.daocloud.io` → `dockerproxy.com` → `docker.io`
+- APT 镜像：`aliyun` → `tsinghua` → `ustc` → `huaweicloud`
+- GH 代理：`gh-proxy.org` → `ghfast.top` → `ghproxy.net` → 直连
 
 ---
 

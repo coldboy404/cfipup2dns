@@ -15,7 +15,8 @@ services:
       PORT: 9527
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
-      GH_PROXY: https://gh-proxy.org/
-      MCIS_TAG: v0.2.3
+      GH_PROXY: ${GH_PROXY:-https://gh-proxy.org/}
+      MCIS_TAG: ${MCIS_TAG:-v0.2.3}
     volumes:
       - ./data:/data
+ata
