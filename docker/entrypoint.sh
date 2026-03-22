@@ -1,32 +1,25 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-export PROJECT_DIR="${PROJECT_DIR:-/data/project}"
-export CONFIG_FILE="${CONFIG_FILE:-$PROJECT_DIR/config.json}"
-export PORT="${PORT:-9527}"
-export TZ="${TZ:-Asia/Shanghai}"
+PROJECT_DIR="${PROJECT_DIR:-/data/project}"
+CONFIG_FILE="${CONFIG_FILE:-$PROJECT_DIR/config.json}"
+CRON_FILE="${CRON_FILE:-/data/cron/cfip.cron}"
+LOG_DIR="$(dirname "${LOG_FILE:-/data/logs/cron.log}")"
+PORT="${PORT:-9527}"
 
-mkdir -p "$PROJECT_DIR" /data/logs /data/cron
+mkdir -p "$PROJECT_DIR" "$(dirname "$CRON_FILE")" "$LOG_DIR"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
+if [ ! -f "$CONFIG_FILE" ]; then
   cp /opt/cfipup2dns/config.example.json "$CONFIG_FILE"
 fi
 
-install -m 755 /opt/cfipup2dns/cfip.sh /usr/local/bin/cfip-run
-
-/opt/cfipup2dns/docker/init-mcis.sh
-
-CRON_FILE="/data/cron/cfip.cron"
-if [[ ! -f "$CRON_FILE" ]]; then
-  cat > "$CRON_FILE" <<CRON
-SHELL=/bin/bash
+if [ ! -f "$CRON_FILE" ]; then
+  cat > "$CRON_FILE" <<'CRON'
+SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 */2 * * * IP_MODE=both TOP_N=5 /usr/local/bin/cfip-run >> /data/logs/cron.log 2>&1
-@reboot sleep 30 && IP_MODE=both TOP_N=5 /usr/local/bin/cfip-run >> /data/logs/boot.log 2>&1
+0 */2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1
+@reboot sleep 30 && IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1
 CRON
 fi
-
-crontab "$CRON_FILE"
-cron
 
 exec python3 /opt/cfipup2dns/web/app.py

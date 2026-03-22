@@ -10,15 +10,16 @@
     .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 12px 0; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     pre { background: #111; color: #0f0; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
+    .muted { color: #666; font-size: 13px; }
   </style>
 </head>
 <body>
   <h2>cfipup2dns 控制台</h2>
-  <p>作者：coldboy404 ｜ 说明：Cloudflare 优选 IP 自动更新面板（国内服务器友好版）</p>
+  <p>作者：coldboy404 ｜ 说明：Cloudflare 优选 IP 自动更新面板（重构版，无 apt 构建依赖）</p>
 
   <div class="card">
     <h3>Cloudflare 配置</h3>
-    <textarea id="cfg" rows="12">{{ cfg | tojson(indent=2) }}</textarea>
+    <textarea id="cfg" rows="12">{{CFG_JSON}}</textarea>
     <button onclick="saveConfig()">保存配置</button>
   </div>
 
@@ -33,18 +34,19 @@
       <input id="topN" type="number" min="1" value="5" />
     </div>
     <button onclick="runNow()">立即运行</button>
+    <div class="muted" id="runState">空闲</div>
     <pre id="runOutput">等待执行...</pre>
   </div>
 
   <div class="card">
-    <h3>定时任务（crontab）</h3>
-    <textarea id="cron" rows="8">{{ cron_text }}</textarea>
+    <h3>定时任务（内置调度，兼容 crontab 五段格式）</h3>
+    <textarea id="cron" rows="8">{{CRON_TEXT}}</textarea>
     <button onclick="saveCron()">保存定时任务</button>
   </div>
 
   <div class="card">
     <h3>运行日志</h3>
-    <button onclick="loadLogs()">刷新日志</button>
+    <button onclick="refreshAll()">刷新</button>
     <pre id="logs">加载中...</pre>
   </div>
 
@@ -63,7 +65,8 @@ async function runNow() {
   const top_n = Number(document.getElementById('topN').value || 5);
   const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip_mode, top_n})});
   const j = await r.json();
-  document.getElementById('runOutput').textContent = (j.ok ? '[OK]\n' : '[FAIL]\n') + (j.stdout || '') + '\n' + (j.stderr || '');
+  document.getElementById('runState').textContent = j.running ? '任务已启动...' : '已有任务在运行';
+  setTimeout(refreshAll, 1000);
 }
 
 async function loadLogs() {
@@ -72,14 +75,28 @@ async function loadLogs() {
   document.getElementById('logs').textContent = j.logs || '';
 }
 
+async function loadStatus() {
+  const r = await fetch('/api/status');
+  const j = await r.json();
+  const state = j.running ? '运行中' : ('空闲' + (j.code === null ? '' : ` / 上次退出码 ${j.code}`));
+  document.getElementById('runState').textContent = state;
+  document.getElementById('runOutput').textContent = (j.stdout || '') + ((j.stderr || '') ? ('\n' + j.stderr) : '');
+}
+
 async function saveCron() {
   const content = document.getElementById('cron').value;
   const r = await fetch('/api/cron', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content})});
   const j = await r.json();
-  alert(j.ok ? '定时任务已更新' : ('更新失败: ' + (j.stderr || j.error || '')));
+  alert(j.ok ? '定时任务已更新' : ('更新失败: ' + (j.error || '未知错误')));
 }
 
-loadLogs();
+async function refreshAll() {
+  await loadStatus();
+  await loadLogs();
+}
+
+refreshAll();
+setInterval(loadStatus, 3000);
 </script>
 </body>
 </html>
