@@ -15,6 +15,7 @@
       --primary: #4f8cff;
       --primary-2: #76a7ff;
       --warn: #ffb020;
+      --ok: #39d98a;
       --shadow: 0 20px 60px rgba(0,0,0,.35);
       --radius: 18px;
     }
@@ -26,69 +27,41 @@
       color: var(--text);
     }
     .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 32px; }
-    .hero {
-      display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
+    .hero { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
     .hero h1 { margin: 0 0 6px; font-size: 30px; }
     .hero p { margin: 0; color: var(--muted); }
     .hero a { color: #76a7ff; text-decoration: none; }
     .badge-row { display: flex; gap: 10px; flex-wrap: wrap; }
-    .badge {
-      padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1.2fr .8fr;
-      gap: 16px;
-    }
+    .badge { padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 16px; }
     .stack { display: grid; gap: 16px; }
-    .card {
-      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 18px;
-    }
+    .card { background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01)); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
     .card h3 { margin: 0 0 14px; font-size: 18px; }
     .fields { display: grid; gap: 14px; }
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input, select, textarea, button {
-      width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none;
-      background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px;
-    }
+    input, select, textarea, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
     textarea { min-height: 132px; resize: vertical; }
-    button {
-      background: linear-gradient(135deg, var(--primary), var(--primary-2));
-      border: none; font-weight: 700; cursor: pointer;
-    }
+    button { background: linear-gradient(135deg, var(--primary), var(--primary-2)); border: none; font-weight: 700; cursor: pointer; }
     button.secondary { background: rgba(255,255,255,.06); border: 1px solid var(--line); }
     button.warn { background: linear-gradient(135deg, #ff9f43, #ffb347); }
-    .switch {
-      display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 12px; border: 1px solid var(--line);
-    }
+    .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 12px; border: 1px solid var(--line); }
     .switch input { width: 18px; height: 18px; }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
     .toolbar > * { flex: 1; min-width: 140px; }
-    .weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
-    .day {
-      display: flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 12px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); color: var(--text);
-    }
-    .day input { width: 16px; height: 16px; }
-    pre {
-      margin: 0; min-height: 180px; background: #0a0f1f; color: #c6ffd9; border-radius: 14px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word;
-      border: 1px solid rgba(255,255,255,.06);
-    }
-    .status {
-      padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px; border: 1px solid var(--line);
-    }
+    .status { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px; border: 1px solid var(--line); }
+    .ip-list { display: grid; gap: 10px; }
+    .ip-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.03); }
+    .ip-main { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+    .ip-main code { color: #fff; font-size: 15px; }
+    .ip-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tag { border-radius: 999px; padding: 4px 8px; font-size: 12px; background: rgba(57,217,138,.12); color: #87f0ba; border: 1px solid rgba(57,217,138,.2); }
+    pre { margin: 0; min-height: 180px; background: #0a0f1f; color: #c6ffd9; border-radius: 14px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid rgba(255,255,255,.06); }
     details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
-      .row-2, .row-3, .weekdays { grid-template-columns: 1fr; }
+      .row-2, .row-3 { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -170,19 +143,21 @@
           </div>
           <div class="status" id="runState">空闲</div>
           <pre id="runOutput">等待执行...</pre>
+          <div style="height:12px"></div>
+          <div class="ip-list" id="bestIps"><div class="status">暂无优选 IP</div></div>
         </div>
 
         <div class="card">
           <h3>定时任务</h3>
           <div class="fields">
             <div class="switch">
-              <span>启用每日计划</span>
+              <span>启用计划任务</span>
               <input id="scheduleEnabled" type="checkbox" {{SCHEDULE_ENABLED_CHECKED}} />
             </div>
             <div class="row-3">
               <div>
-                <label for="scheduleTime">每天几点</label>
-                <input id="scheduleTime" type="time" value="{{SCHEDULE_TIME}}" />
+                <label for="scheduleInterval">每隔几小时</label>
+                <input id="scheduleInterval" type="number" min="1" max="24" value="{{SCHEDULE_INTERVAL}}" />
               </div>
               <div>
                 <label for="scheduleMode">IP 模式</label>
@@ -195,18 +170,6 @@
               <div>
                 <label for="scheduleTopN">TOP_N</label>
                 <input id="scheduleTopN" type="number" min="1" max="50" value="{{SCHEDULE_TOPN}}" />
-              </div>
-            </div>
-            <div>
-              <label>每周几</label>
-              <div class="weekdays">
-                <label class="day"><input type="checkbox" value="1" class="weekday" {{WD_MON_CHECKED}} />一</label>
-                <label class="day"><input type="checkbox" value="2" class="weekday" {{WD_TUE_CHECKED}} />二</label>
-                <label class="day"><input type="checkbox" value="3" class="weekday" {{WD_WED_CHECKED}} />三</label>
-                <label class="day"><input type="checkbox" value="4" class="weekday" {{WD_THU_CHECKED}} />四</label>
-                <label class="day"><input type="checkbox" value="5" class="weekday" {{WD_FRI_CHECKED}} />五</label>
-                <label class="day"><input type="checkbox" value="6" class="weekday" {{WD_SAT_CHECKED}} />六</label>
-                <label class="day"><input type="checkbox" value="0" class="weekday" {{WD_SUN_CHECKED}} />日</label>
               </div>
             </div>
             <div class="switch">
@@ -262,28 +225,17 @@ function applyForm(form) {
 
 function applySchedule(schedule, raw) {
   document.getElementById('scheduleEnabled').checked = !!schedule.enabled;
-  document.getElementById('scheduleTime').value = schedule.time || '02:00';
+  document.getElementById('scheduleInterval').value = schedule.interval_hours || 6;
   document.getElementById('scheduleMode').value = schedule.ip_mode || 'both';
-  document.getElementById('scheduleTopN').value = schedule.top_n || 5;
+  document.getElementById('scheduleTopN').value = schedule.top_n || 3;
   document.getElementById('scheduleReboot').checked = !!schedule.reboot;
-  document.querySelectorAll('.weekday').forEach(el => {
-    el.checked = (schedule.weekdays || []).includes(Number(el.value));
-  });
   document.getElementById('cron').value = raw || '';
-}
-
-function getWeekdays() {
-  return Array.from(document.querySelectorAll('.weekday:checked')).map(el => Number(el.value)).sort((a, b) => a - b);
 }
 
 async function saveConfig() {
   const payload = collectConfig();
   if (!payload.token || !payload.zone_id || !payload.domain) return alert('必填项不能为空');
-  const r = await fetch('/api/config', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload)
-  });
+  const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const j = await r.json();
   if (!j.ok) return alert('保存失败');
   applyForm(j.form || payload);
@@ -309,6 +261,30 @@ function toggleToken() {
   el.type = el.type === 'password' ? 'text' : 'password';
 }
 
+function renderBestIps(items) {
+  const root = document.getElementById('bestIps');
+  if (!items || !items.length) {
+    root.innerHTML = '<div class="status">暂无优选 IP</div>';
+    return;
+  }
+  root.innerHTML = items.map(item => {
+    const tags = [
+      `<span class="tag">IPv${item.version}</span>`,
+      item.download_mbps ? `<span class="tag">下载 ${item.download_mbps} Mbps</span>` : '',
+      item.latency_ms ? `<span class="tag">延迟 ${item.latency_ms} ms</span>` : '',
+      item.score_ms ? `<span class="tag">评分 ${item.score_ms}</span>` : '',
+      item.sort_mode ? `<span class="tag">${item.sort_mode}</span>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="ip-item"><div class="ip-main"><code>${item.ip}</code></div><div class="ip-tags">${tags}</div></div>`;
+  }).join('');
+}
+
+async function loadBestIps() {
+  const r = await fetch('/api/best-ips');
+  const j = await r.json();
+  renderBestIps(j.result || []);
+}
+
 async function runNow() {
   const ip_mode = document.getElementById('ipMode').value;
   const top_n = Number(document.getElementById('topN').value || 5);
@@ -325,11 +301,10 @@ async function runNow() {
 async function saveSimpleSchedule() {
   const payload = {
     enabled: document.getElementById('scheduleEnabled').checked,
-    time: document.getElementById('scheduleTime').value || '02:00',
-    weekdays: getWeekdays(),
+    interval_hours: Number(document.getElementById('scheduleInterval').value || 6),
     reboot: document.getElementById('scheduleReboot').checked,
     ip_mode: document.getElementById('scheduleMode').value,
-    top_n: Number(document.getElementById('scheduleTopN').value || 5),
+    top_n: Number(document.getElementById('scheduleTopN').value || 3),
   };
   const r = await fetch('/api/schedule', {
     method: 'POST',
@@ -345,7 +320,10 @@ async function saveSimpleSchedule() {
 async function loadLogs() {
   const r = await fetch('/api/logs');
   const j = await r.json();
-  document.getElementById('logs').textContent = j.logs || '';
+  const el = document.getElementById('logs');
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.textContent = j.logs || '';
+  if (nearBottom) el.scrollTop = el.scrollHeight;
 }
 
 async function loadStatus() {
@@ -354,6 +332,7 @@ async function loadStatus() {
   const state = j.running ? '运行中' : ('空闲' + (j.code === null ? '' : ` / 退出码 ${j.code}`));
   document.getElementById('runState').textContent = state;
   document.getElementById('runOutput').textContent = (j.stdout || '') + ((j.stderr || '') ? ('\n' + j.stderr) : '');
+  renderBestIps(j.selected_ips || []);
 }
 
 async function saveCron() {
@@ -370,17 +349,17 @@ async function saveCron() {
 }
 
 function setRecommendedCron() {
-  document.getElementById('cron').value = `SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1\n@reboot sleep 30 && IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1\n`;
+  document.getElementById('cron').value = `SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 */6 * * * IP_MODE=both TOP_N=3 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1\n@reboot sleep 30 && IP_MODE=both TOP_N=3 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1\n`;
 }
 
 async function refreshAll() {
-  await Promise.all([loadStatus(), loadLogs()]);
+  await Promise.all([loadStatus(), loadLogs(), loadBestIps()]);
 }
 
 reloadConfig();
 reloadSchedule();
 refreshAll();
-setInterval(loadStatus, 3000);
+setInterval(refreshAll, 3000);
 </script>
 </body>
 </html>

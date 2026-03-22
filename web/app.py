@@ -16,9 +16,20 @@ CRON_FILE = Path(os.getenv("CRON_FILE", "/data/cron/cfip.cron"))
 LOG_FILE = Path(os.getenv("LOG_FILE", "/data/logs/cron.log"))
 PORT = int(os.getenv("PORT", "9527"))
 RUN_CMD = "/opt/cfipup2dns/cfip.sh"
-WEEKDAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+BEST_IP_FILES = {
+    "4": PROJECT_DIR / "best_ips_v4.json",
+    "6": PROJECT_DIR / "best_ips_v6.json",
+}
 
-LAST_RUN = {"running": False, "code": None, "stdout": "", "stderr": "", "started_at": None, "ended_at": None}
+LAST_RUN = {
+    "running": False,
+    "code": None,
+    "stdout": "",
+    "stderr": "",
+    "started_at": None,
+    "ended_at": None,
+    "selected_ips": [],
+}
 
 
 def load_html():
@@ -108,51 +119,28 @@ def fill_template(template, mapping):
     return template
 
 
-def default_cron_text():
-    return build_cron_text(True, "02:00", list(range(7)), True, "both", 5)
-
-
-def parse_time_hhmm(value):
-    s = str(value or "02:00").strip()
-    if ":" not in s:
-        return "02:00"
-    hh, mm = s.split(":", 1)
+def clamp_int(value, default, low, high):
     try:
-        hh = max(0, min(23, int(hh)))
-        mm = max(0, min(59, int(mm)))
+        n = int(value)
     except Exception:
-        return "02:00"
-    return f"{hh:02d}:{mm:02d}"
+        n = default
+    return max(low, min(high, n))
 
 
-def normalize_weekdays(values):
-    if values in (None, "", []):
-        return list(range(7))
-    if isinstance(values, str):
-        values = [v.strip() for v in values.split(",") if v.strip() != ""]
-    out = []
-    for v in values:
-        try:
-            iv = int(v)
-        except Exception:
-            continue
-        if 0 <= iv <= 6 and iv not in out:
-            out.append(iv)
-    return sorted(out) or list(range(7))
+def default_cron_text():
+    return build_cron_text(True, 6, True, "both", 3)
 
 
 def cron_state(text):
     state = {
         "enabled": False,
-        "time": "02:00",
-        "weekdays": list(range(7)),
+        "interval_hours": 6,
         "reboot": False,
         "ip_mode": "both",
-        "top_n": 5,
+        "top_n": 3,
         "raw": text or "",
     }
-    lines = (text or "").splitlines()
-    for line in lines:
+    for line in (text or "").splitlines():
         s = line.strip()
         if not s or s.startswith("#") or s.startswith("SHELL=") or s.startswith("PATH="):
             continue
@@ -163,67 +151,36 @@ def cron_state(text):
                     if token.startswith("IP_MODE="):
                         state["ip_mode"] = token.split("=", 1)[1] or "both"
                     elif token.startswith("TOP_N="):
-                        try:
-                            state["top_n"] = max(1, int(token.split("=", 1)[1]))
-                        except Exception:
-                            pass
+                        state["top_n"] = clamp_int(token.split("=", 1)[1], 3, 1, 50)
             continue
         parts = s.split(None, 5)
         if len(parts) < 6:
             continue
-        minute, hour, _day, _month, weekday, command = parts
+        minute, hour, day, month, weekday, command = parts
         if RUN_CMD not in command:
             continue
         state["enabled"] = True
-        try:
-            hh = max(0, min(23, int(hour)))
-            mm = max(0, min(59, int(minute)))
-            state["time"] = f"{hh:02d}:{mm:02d}"
-        except Exception:
-            if minute == "0" and hour.startswith("*/"):
-                state["time"] = "00:00"
-        if weekday.strip() == "*":
-            state["weekdays"] = list(range(7))
-        else:
-            days = []
-            for p in weekday.split(","):
-                p = p.strip()
-                if p.isdigit():
-                    iv = int(p)
-                    if 0 <= iv <= 6 and iv not in days:
-                        days.append(iv)
-            state["weekdays"] = sorted(days) or list(range(7))
+        if minute == "0" and hour.startswith("*/") and day == "*" and month == "*" and weekday == "*":
+            state["interval_hours"] = clamp_int(hour[2:], 6, 1, 24)
         for token in command.split():
             if token.startswith("IP_MODE="):
                 state["ip_mode"] = token.split("=", 1)[1] or "both"
             elif token.startswith("TOP_N="):
-                try:
-                    state["top_n"] = max(1, int(token.split("=", 1)[1]))
-                except Exception:
-                    pass
-        continue
+                state["top_n"] = clamp_int(token.split("=", 1)[1], 3, 1, 50)
     return state
 
 
-def build_cron_text(enabled, run_time, weekdays, reboot, ip_mode, top_n):
-    run_time = parse_time_hhmm(run_time)
-    weekdays = normalize_weekdays(weekdays)
-    try:
-        top_n = int(top_n)
-    except Exception:
-        top_n = 5
-    top_n = max(1, min(top_n, 50))
+def build_cron_text(enabled, interval_hours, reboot, ip_mode, top_n):
+    interval_hours = clamp_int(interval_hours, 6, 1, 24)
+    top_n = clamp_int(top_n, 3, 1, 50)
     if ip_mode not in ("4", "6", "both"):
         ip_mode = "both"
-    hh, mm = run_time.split(":", 1)
-    weekday_field = "*" if weekdays == list(range(7)) else ",".join(str(v) for v in weekdays)
-
     lines = [
         "SHELL=/bin/sh",
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ]
     if enabled:
-        lines.append(f"{int(mm)} {int(hh)} * * {weekday_field} IP_MODE={ip_mode} TOP_N={top_n} {RUN_CMD} >> /data/logs/cron.log 2>&1")
+        lines.append(f"0 */{interval_hours} * * * IP_MODE={ip_mode} TOP_N={top_n} {RUN_CMD} >> /data/logs/cron.log 2>&1")
     if reboot:
         lines.append(f"@reboot sleep 30 && IP_MODE={ip_mode} TOP_N={top_n} {RUN_CMD} >> /data/logs/boot.log 2>&1")
     return "\n".join(lines) + "\n"
@@ -236,6 +193,31 @@ def save_cron_text(content):
     CRON_FILE.parent.mkdir(parents=True, exist_ok=True)
     CRON_FILE.write_text(content, encoding="utf-8")
     return content
+
+
+def load_selected_ips():
+    items = []
+    for version, path in BEST_IP_FILES.items():
+        if not path.exists():
+            continue
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        mode = obj.get("mode", "")
+        for row in obj.get("result", []) or []:
+            ip = row.get("ip")
+            if not ip:
+                continue
+            items.append({
+                "version": version,
+                "ip": ip,
+                "latency_ms": row.get("latency_ms"),
+                "download_mbps": row.get("download_mbps"),
+                "score_ms": row.get("score_ms"),
+                "sort_mode": mode,
+            })
+    return items
 
 
 def render_index():
@@ -253,14 +235,12 @@ def render_index():
         "CRON_TEXT": html.escape(cron_text),
         "SCHEDULE_ENABLED_CHECKED": "checked" if cron_form["enabled"] else "",
         "SCHEDULE_REBOOT_CHECKED": "checked" if cron_form["reboot"] else "",
-        "SCHEDULE_TIME": html.escape(cron_form["time"]),
+        "SCHEDULE_INTERVAL": str(cron_form["interval_hours"]),
         "SCHEDULE_TOPN": str(cron_form["top_n"]),
         "SCHEDULE_MODE_4": "selected" if cron_form["ip_mode"] == "4" else "",
         "SCHEDULE_MODE_6": "selected" if cron_form["ip_mode"] == "6" else "",
         "SCHEDULE_MODE_BOTH": "selected" if cron_form["ip_mode"] == "both" else "",
     }
-    for i, name in enumerate(WEEKDAY_NAMES):
-        mapping[f"WD_{name.upper()}_CHECKED"] = "checked" if i in cron_form["weekdays"] else ""
     return fill_template(tpl, mapping)
 
 
@@ -336,10 +316,48 @@ def trigger_run(env=None):
 
 
 def run_job(env):
-    LAST_RUN.update({"running": True, "code": None, "stdout": "", "stderr": "", "started_at": time.time(), "ended_at": None})
-    p = subprocess.run(RUN_CMD, shell=True, text=True, capture_output=True, env=env)
-    LAST_RUN.update({"running": False, "code": p.returncode, "stdout": p.stdout[-8000:], "stderr": p.stderr[-8000:], "ended_at": time.time()})
-    append_log(f"\n===== {datetime.now().isoformat()} code={p.returncode} =====\n{p.stdout}\n{p.stderr}\n")
+    LAST_RUN.update({
+        "running": True,
+        "code": None,
+        "stdout": "",
+        "stderr": "",
+        "started_at": time.time(),
+        "ended_at": None,
+        "selected_ips": [],
+    })
+    chunks = []
+    append_log(f"\n===== {datetime.now().isoformat()} started =====\n")
+    proc = subprocess.Popen(
+        RUN_CMD,
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        bufsize=1,
+    )
+    try:
+        if proc.stdout is not None:
+            for line in iter(proc.stdout.readline, ""):
+                if not line:
+                    break
+                chunks.append(line)
+                current = "".join(chunks)[-16000:]
+                LAST_RUN["stdout"] = current
+                append_log(line)
+        code = proc.wait()
+    finally:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    LAST_RUN.update({
+        "running": False,
+        "code": code,
+        "stdout": "".join(chunks)[-16000:],
+        "stderr": "",
+        "ended_at": time.time(),
+        "selected_ips": load_selected_ips(),
+    })
+    append_log(f"===== {datetime.now().isoformat()} finished code={code} =====\n")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -350,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             live_parts = []
             if LAST_RUN.get("running"):
-                live_parts.append("[运行中]")
+                live_parts.append("[运行中] 实时刷新中...")
             if LAST_RUN.get("started_at"):
                 live_parts.append(f"started_at={datetime.fromtimestamp(LAST_RUN['started_at']).isoformat()}")
             if LAST_RUN.get("ended_at"):
@@ -364,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             live_logs = "\n\n".join([p for p in live_parts if p]).strip()
             file_logs = ""
             if LOG_FILE.exists():
-                file_logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:]).strip()
+                file_logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-300:]).strip()
             combined = "\n\n".join([p for p in [live_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
@@ -375,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/schedule":
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
             return json_response(self, {"ok": True, "schedule": cron_state(raw), "raw": raw})
+        if path == "/api/best-ips":
+            return json_response(self, {"ok": True, "result": load_selected_ips()})
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
 
     def do_POST(self):
@@ -400,11 +420,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/schedule":
             content = build_cron_text(
                 bool(body.get("enabled", False)),
-                body.get("time", "02:00"),
-                body.get("weekdays", list(range(7))),
+                body.get("interval_hours", 6),
                 bool(body.get("reboot", False)),
                 body.get("ip_mode", "both"),
-                body.get("top_n", 5),
+                body.get("top_n", 3),
             )
             save_cron_text(content)
             return json_response(self, {"ok": True, "raw": content, "schedule": cron_state(content)})
