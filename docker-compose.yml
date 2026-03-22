@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: ${BASE_IMAGE:-docker.1panel.live/library/debian:bookworm-slim}
-        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+        BASE_IMAGE: ${BASE_IMAGE:-debian:bookworm-slim}
+        APT_MIRROR: ${APT_MIRROR:-}
     container_name: cfipup2dns
     restart: unless-stopped
     ports:

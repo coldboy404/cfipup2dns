@@ -7,7 +7,7 @@
 - ✅ 定时任务管理（cron）
 - ✅ 手动一键执行优选
 - ✅ 日志在线查看
-- ✅ 国内加速源默认启用（APT 镜像 + GitHub 代理）
+- ✅ 支持官方源稳定构建 + 可选国内加速源（APT 镜像 + GitHub 代理）
 
 ---
 
@@ -165,17 +165,29 @@ environment:
 
 ## 国内加速说明
 
-默认使用以下加速策略：
+当前默认策略：
 
-- Debian APT 镜像：`mirrors.ustc.edu.cn`
-- GitHub 下载代理：`https://gh-proxy.com/`
+- Debian APT：默认走官方源，优先保证稳定构建
+- GitHub 下载代理：默认 `https://gh-proxy.org/`
 
-可通过环境变量自定义：
+如需在国内网络显式启用 APT 镜像，可在构建时传入：
 
-```yaml
-environment:
-  GH_PROXY: https://gh-proxy.com/
-  MCIS_TAG: v0.2.3
+```bash
+APT_MIRROR=mirrors.ustc.edu.cn docker compose build --no-cache
+```
+
+也可同时自定义 GitHub 代理：
+
+```bash
+GH_PROXY=https://gh-proxy.org/ docker compose up -d --build
+```
+
+如需持久化到 `.env`，可写入：
+
+```env
+APT_MIRROR=mirrors.ustc.edu.cn
+GH_PROXY=https://gh-proxy.org/
+MCIS_TAG=v0.2.3
 ```
 
 ---
