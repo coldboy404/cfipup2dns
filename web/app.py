@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import html
 import json
 import os
 import subprocess
@@ -7,7 +8,7 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", "/data/project"))
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
@@ -20,8 +21,7 @@ LAST_RUN = {"running": False, "code": None, "stdout": "", "stderr": "", "started
 
 
 def load_html():
-    p = Path("/opt/cfipup2dns/web/templates/index.html")
-    return p.read_text(encoding="utf-8")
+    return Path("/opt/cfipup2dns/web/templates/index.html").read_text(encoding="utf-8")
 
 
 def json_response(handler, obj, status=200):
@@ -42,24 +42,86 @@ def text_response(handler, text, status=200, content_type="text/html; charset=ut
     handler.wfile.write(body)
 
 
-def schedule_loop():
-    last_minute = None
-    while True:
-        try:
-            now = datetime.now()
-            key = now.strftime("%Y-%m-%d %H:%M")
-            if key != last_minute:
-                last_minute = key
-                maybe_run_scheduled(now)
-        except Exception as e:
-            append_log(f"[scheduler-error] {e}\n")
-        time.sleep(1)
-
-
 def append_log(text):
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(text)
+
+
+def default_config():
+    return {
+        "cloudflare": {
+            "token": "",
+            "zone_id": "",
+            "domain": "",
+            "ttl": 60,
+            "proxied": False,
+        }
+    }
+
+
+def load_config():
+    if not CONFIG_FILE.exists():
+        return default_config()
+    try:
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return default_config()
+
+
+def form_state(cfg):
+    cloudflare = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
+    return {
+        "token": str(cloudflare.get("token", "") or ""),
+        "zone_id": str(cloudflare.get("zone_id", "") or ""),
+        "domain": str(cloudflare.get("domain", "") or ""),
+        "ttl": str(cloudflare.get("ttl", 60) or 60),
+        "proxied": bool(cloudflare.get("proxied", False)),
+    }
+
+
+def save_config_from_form(body):
+    ttl_raw = str(body.get("ttl", "60") or "60").strip()
+    try:
+        ttl = int(ttl_raw)
+    except Exception:
+        ttl = 60
+    ttl = max(1, min(ttl, 86400))
+    cfg = {
+        "cloudflare": {
+            "token": str(body.get("token", "") or "").strip(),
+            "zone_id": str(body.get("zone_id", "") or "").strip(),
+            "domain": str(body.get("domain", "") or "").strip(),
+            "ttl": ttl,
+            "proxied": bool(body.get("proxied", False)),
+        }
+    }
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cfg
+
+
+def fill_template(template, mapping):
+    for k, v in mapping.items():
+        template = template.replace("{{" + k + "}}", v)
+    return template
+
+
+def render_index():
+    cfg = load_config()
+    state = form_state(cfg)
+    cron_text = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else ""
+    raw_json = json.dumps(cfg, ensure_ascii=False, indent=2)
+    tpl = load_html()
+    return fill_template(tpl, {
+        "CF_TOKEN": html.escape(state["token"]),
+        "CF_ZONE_ID": html.escape(state["zone_id"]),
+        "CF_DOMAIN": html.escape(state["domain"]),
+        "CF_TTL": html.escape(state["ttl"]),
+        "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
+        "CRON_TEXT": html.escape(cron_text),
+        "CONFIG_JSON": html.escape(raw_json),
+    })
 
 
 def parse_cron_field(field, value):
@@ -111,6 +173,20 @@ def maybe_run_scheduled(now):
         break
 
 
+def schedule_loop():
+    last_minute = None
+    while True:
+        try:
+            now = datetime.now()
+            key = now.strftime("%Y-%m-%d %H:%M")
+            if key != last_minute:
+                last_minute = key
+                maybe_run_scheduled(now)
+        except Exception as e:
+            append_log(f"[scheduler-error] {e}\n")
+        time.sleep(1)
+
+
 def trigger_run(env=None):
     if LAST_RUN["running"]:
         return False
@@ -130,12 +206,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
-            cfg = {}
-            if CONFIG_FILE.exists():
-                cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            cron_text = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else ""
-            html = load_html().replace("{{CFG_JSON}}", json.dumps(cfg, ensure_ascii=False, indent=2)).replace("{{CRON_TEXT}}", cron_text)
-            return text_response(self, html)
+            return text_response(self, render_index())
         if path == "/api/logs":
             if not LOG_FILE.exists():
                 return json_response(self, {"ok": True, "logs": "(暂无日志)"})
@@ -143,6 +214,8 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"ok": True, "logs": logs})
         if path == "/api/status":
             return json_response(self, {"ok": True, **LAST_RUN})
+        if path == "/api/config":
+            return json_response(self, {"ok": True, "config": load_config(), "form": form_state(load_config())})
         return text_response(self, "Not Found", 404, "text/plain; charset=utf-8")
 
     def do_POST(self):
@@ -155,9 +228,8 @@ class Handler(BaseHTTPRequestHandler):
             body = {}
 
         if path == "/api/config":
-            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            CONFIG_FILE.write_text(json.dumps(body or {}, ensure_ascii=False, indent=2), encoding="utf-8")
-            return json_response(self, {"ok": True})
+            cfg = save_config_from_form(body or {})
+            return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
 
         if path == "/api/cron":
             content = (body.get("content") or "").strip() + "\n"

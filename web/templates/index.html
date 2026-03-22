@@ -5,65 +5,279 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>cfipup2dns WebUI</title>
   <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial; max-width: 960px; margin: 20px auto; padding: 0 12px; }
-    textarea,input,select,button { width: 100%; margin: 6px 0; padding: 8px; box-sizing: border-box; }
-    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 12px 0; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    pre { background: #111; color: #0f0; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
-    .muted { color: #666; font-size: 13px; }
+    :root {
+      --bg: #0b1020;
+      --panel: #121932;
+      --panel-2: #182243;
+      --text: #eaf1ff;
+      --muted: #9fb0d3;
+      --line: rgba(255,255,255,.08);
+      --primary: #4f8cff;
+      --primary-2: #76a7ff;
+      --ok: #23c483;
+      --warn: #ffb020;
+      --danger: #ff5d73;
+      --shadow: 0 20px 60px rgba(0,0,0,.35);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top, #1b2752 0%, var(--bg) 48%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 48px; }
+    .hero {
+      display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+    .hero h1 { margin: 0 0 6px; font-size: 30px; }
+    .hero p { margin: 0; color: var(--muted); }
+    .badge-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .badge {
+      padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 16px;
+    }
+    .stack { display: grid; gap: 16px; }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 18px; }
+    .desc { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    .fields { display: grid; gap: 14px; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select, textarea, button {
+      width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none;
+      background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px;
+    }
+    textarea { min-height: 132px; resize: vertical; }
+    input::placeholder, textarea::placeholder { color: #7f90b5; }
+    button {
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
+      border: none; font-weight: 700; cursor: pointer;
+    }
+    button.secondary { background: rgba(255,255,255,.06); border: 1px solid var(--line); }
+    button.warn { background: linear-gradient(135deg, #ff9f43, #ffb347); }
+    .switch {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 12px; border: 1px solid var(--line);
+    }
+    .switch input { width: 18px; height: 18px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+    .toolbar > * { flex: 1; min-width: 140px; }
+    pre {
+      margin: 0; min-height: 180px; background: #0a0f1f; color: #c6ffd9; border-radius: 14px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      border: 1px solid rgba(255,255,255,.06);
+    }
+    .status {
+      padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px; border: 1px solid var(--line);
+    }
+    .tips {
+      display: grid; gap: 8px; color: var(--muted); font-size: 13px;
+    }
+    .tips code, .hint code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 8px; }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .json-box { min-height: 220px; }
+    .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      .row-2, .row-3 { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <h2>cfipup2dns 控制台</h2>
-  <p>作者：coldboy404 ｜ 说明：Cloudflare 优选 IP 自动更新面板（重构版，无 apt 构建依赖）</p>
-
-  <div class="card">
-    <h3>Cloudflare 配置</h3>
-    <textarea id="cfg" rows="12">{{CFG_JSON}}</textarea>
-    <button onclick="saveConfig()">保存配置</button>
-  </div>
-
-  <div class="card">
-    <h3>立即执行</h3>
-    <div class="row">
-      <select id="ipMode">
-        <option value="both">both (IPv4 + IPv6)</option>
-        <option value="4">4 (仅 IPv4)</option>
-        <option value="6">6 (仅 IPv6)</option>
-      </select>
-      <input id="topN" type="number" min="1" value="5" />
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>cfipup2dns 控制台</h1>
+        <p>作者：coldboy404 ｜ Cloudflare 优选 IP 自动更新面板</p>
+      </div>
+      <div class="badge-row">
+        <div class="badge">WebUI</div>
+        <div class="badge">Docker</div>
+        <div class="badge">Cloudflare DNS</div>
+        <div class="badge">端口 9527</div>
+      </div>
     </div>
-    <button onclick="runNow()">立即运行</button>
-    <div class="muted" id="runState">空闲</div>
-    <pre id="runOutput">等待执行...</pre>
-  </div>
 
-  <div class="card">
-    <h3>定时任务（内置调度，兼容 crontab 五段格式）</h3>
-    <textarea id="cron" rows="8">{{CRON_TEXT}}</textarea>
-    <button onclick="saveCron()">保存定时任务</button>
-  </div>
+    <div class="grid">
+      <div class="stack">
+        <div class="card">
+          <h3>Cloudflare 配置</h3>
+          <div class="desc">已改成表单配置，不用再手填原始 JSON。</div>
+          <div class="fields">
+            <div>
+              <label for="token">API Token</label>
+              <input id="token" type="password" placeholder="填 Cloudflare API Token" value="{{CF_TOKEN}}" />
+            </div>
+            <div class="row-2">
+              <div>
+                <label for="zoneId">Zone ID</label>
+                <input id="zoneId" placeholder="32位 Zone ID" value="{{CF_ZONE_ID}}" />
+              </div>
+              <div>
+                <label for="domain">域名 / 记录名</label>
+                <input id="domain" placeholder="如 cf.example.com" value="{{CF_DOMAIN}}" />
+              </div>
+            </div>
+            <div class="row-2">
+              <div>
+                <label for="ttl">TTL</label>
+                <input id="ttl" type="number" min="1" max="86400" value="{{CF_TTL}}" />
+              </div>
+              <div>
+                <label>&nbsp;</label>
+                <div class="switch">
+                  <span>开启 Cloudflare 代理（橙云）</span>
+                  <input id="proxied" type="checkbox" {{CF_PROXIED_CHECKED}} />
+                </div>
+              </div>
+            </div>
+            <div class="toolbar">
+              <button onclick="saveConfig()">保存配置</button>
+              <button class="secondary" onclick="reloadConfig()">重新读取</button>
+              <button class="secondary" onclick="toggleToken()">显示 / 隐藏 Token</button>
+            </div>
+            <div class="hint">
+              最小权限建议：<code>Zone DNS Edit</code> + <code>Zone Read</code>，并将作用范围限制到对应 Zone。
+            </div>
+          </div>
+        </div>
 
-  <div class="card">
-    <h3>运行日志</h3>
-    <button onclick="refreshAll()">刷新</button>
-    <pre id="logs">加载中...</pre>
+        <div class="card">
+          <h3>立即执行</h3>
+          <div class="desc">手动触发优选并回写 DNS。</div>
+          <div class="row-3">
+            <div>
+              <label for="ipMode">IP 模式</label>
+              <select id="ipMode">
+                <option value="both">both（IPv4 + IPv6）</option>
+                <option value="4">4（仅 IPv4）</option>
+                <option value="6">6（仅 IPv6）</option>
+              </select>
+            </div>
+            <div>
+              <label for="topN">写入数量 TOP_N</label>
+              <input id="topN" type="number" min="1" value="5" />
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button class="warn" onclick="runNow()">立即运行</button>
+            </div>
+          </div>
+          <div class="status" id="runState">空闲</div>
+          <pre id="runOutput">等待执行...</pre>
+        </div>
+
+        <div class="card">
+          <h3>调度计划</h3>
+          <div class="desc">这里仍兼容 crontab 五段格式，但你不需要碰系统 cron。</div>
+          <textarea id="cron">{{CRON_TEXT}}</textarea>
+          <div class="toolbar">
+            <button onclick="saveCron()">保存计划</button>
+            <button class="secondary" onclick="setRecommendedCron()">恢复推荐计划</button>
+          </div>
+          <div class="hint">推荐默认值：<code>0 */2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh &gt;&gt; /data/logs/cron.log 2&gt;&amp;1</code></div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h3>运行日志</h3>
+          <div class="toolbar">
+            <button class="secondary" onclick="refreshAll()">刷新</button>
+          </div>
+          <pre id="logs">加载中...</pre>
+        </div>
+
+        <div class="card">
+          <h3>原始配置 JSON</h3>
+          <div class="desc">默认隐藏成表单；这里仅作为高级查看，不建议手改。</div>
+          <textarea id="jsonView" class="json-box" readonly>{{CONFIG_JSON}}</textarea>
+        </div>
+
+        <div class="card">
+          <h3>说明</h3>
+          <div class="tips">
+            <div>1. 先填 Cloudflare Token、Zone ID、域名，保存后再执行。</div>
+            <div>2. <code>TOP_N</code> 表示每种记录写入 Cloudflare 的 IP 数量。</div>
+            <div>3. 开启代理时，A / AAAA 记录会按 Cloudflare 橙云方式写入。</div>
+            <div>4. 页面主页和作者信息已固定为当前项目与作者。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">如果还想继续美化，我下一步可以给你加：密码星号按钮、运行历史卡片、表单校验提示、移动端适配、浅色主题。</div>
   </div>
 
 <script>
+function collectConfig() {
+  return {
+    token: document.getElementById('token').value.trim(),
+    zone_id: document.getElementById('zoneId').value.trim(),
+    domain: document.getElementById('domain').value.trim(),
+    ttl: Number(document.getElementById('ttl').value || 60),
+    proxied: document.getElementById('proxied').checked,
+  };
+}
+
+function applyForm(form) {
+  document.getElementById('token').value = form.token || '';
+  document.getElementById('zoneId').value = form.zone_id || '';
+  document.getElementById('domain').value = form.domain || '';
+  document.getElementById('ttl').value = form.ttl || 60;
+  document.getElementById('proxied').checked = !!form.proxied;
+}
+
 async function saveConfig() {
-  const txt = document.getElementById('cfg').value;
-  let data;
-  try { data = JSON.parse(txt); } catch (e) { return alert('JSON 格式错误: ' + e.message); }
-  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+  const payload = collectConfig();
+  if (!payload.token || !payload.zone_id || !payload.domain) {
+    return alert('Token / Zone ID / 域名 不能为空');
+  }
+  const r = await fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
   const j = await r.json();
-  alert(j.ok ? '配置已保存' : '保存失败');
+  if (!j.ok) return alert('保存失败');
+  applyForm(j.form || payload);
+  document.getElementById('jsonView').value = JSON.stringify(j.config || {}, null, 2);
+  alert('配置已保存');
+}
+
+async function reloadConfig() {
+  const r = await fetch('/api/config');
+  const j = await r.json();
+  if (!j.ok) return alert('读取失败');
+  applyForm(j.form || {});
+  document.getElementById('jsonView').value = JSON.stringify(j.config || {}, null, 2);
+}
+
+function toggleToken() {
+  const el = document.getElementById('token');
+  el.type = el.type === 'password' ? 'text' : 'password';
 }
 
 async function runNow() {
   const ip_mode = document.getElementById('ipMode').value;
   const top_n = Number(document.getElementById('topN').value || 5);
-  const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip_mode, top_n})});
+  const r = await fetch('/api/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ip_mode, top_n})
+  });
   const j = await r.json();
   document.getElementById('runState').textContent = j.running ? '任务已启动...' : '已有任务在运行';
   setTimeout(refreshAll, 1000);
@@ -85,16 +299,24 @@ async function loadStatus() {
 
 async function saveCron() {
   const content = document.getElementById('cron').value;
-  const r = await fetch('/api/cron', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content})});
+  const r = await fetch('/api/cron', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({content})
+  });
   const j = await r.json();
-  alert(j.ok ? '定时任务已更新' : ('更新失败: ' + (j.error || '未知错误')));
+  alert(j.ok ? '计划已保存' : ('保存失败: ' + (j.error || '未知错误')));
+}
+
+function setRecommendedCron() {
+  document.getElementById('cron').value = `SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 */2 * * * IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/cron.log 2>&1\n@reboot sleep 30 && IP_MODE=both TOP_N=5 /opt/cfipup2dns/cfip.sh >> /data/logs/boot.log 2>&1\n`;
 }
 
 async function refreshAll() {
-  await loadStatus();
-  await loadLogs();
+  await Promise.all([loadStatus(), loadLogs()]);
 }
 
+reloadConfig();
 refreshAll();
 setInterval(loadStatus, 3000);
 </script>
