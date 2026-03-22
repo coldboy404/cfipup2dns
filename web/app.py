@@ -393,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
             combined = "\n\n".join([p for p in [live_logs, init_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
-            return json_response(self, {"ok": True, **LAST_RUN})
+            return json_response(self, {"ok": True, **LAST_RUN, "next_run_at": next_run_time()})
         if path == "/api/config":
             cfg = load_config()
             return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})

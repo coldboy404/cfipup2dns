@@ -267,8 +267,8 @@ function formatDateTime(v) {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}-${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function renderBestIpsMeta(updatedAt, nextRunAt) {
-  document.getElementById('bestIpsMeta').innerHTML = `优选 IP 时间：${formatDateTime(updatedAt)}<br>下次运行时间：${formatDateTime(nextRunAt)}`;
+function renderRunStateMeta(updatedAt, nextRunAt) {
+  document.getElementById('runStateMeta').innerHTML = `优选 IP 时间：${formatDateTime(updatedAt)}<br>下次运行时间：${formatDateTime(nextRunAt)}`;
 }
 
 function renderBestIps(items) {
@@ -372,6 +372,15 @@ loadLogs(true);
 bindLogEvents();
 setInterval(() => { loadStatus(); loadBestIps(); }, 3000);
 setInterval(() => { loadLogs(false); }, 3000);
+</script>
+</body>
+</html>
+dBestIps(); }, 3000);
+setInterval(() => { loadLogs(false); }, 3000);
+</script>
+</body>
+</html>
+erval(() => { loadLogs(false); }, 3000);
 </script>
 </body>
 </html>
