@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=registry.cn-hangzhou.aliyuncs.com/acs/debian:bookworm-slim
+ARG BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
 FROM ${BASE_IMAGE}
 
 ARG APT_MIRROR=mirrors.ustc.edu.cn

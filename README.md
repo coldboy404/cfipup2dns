@@ -172,7 +172,7 @@ environment:
 
 默认使用以下加速策略：
 
-- Docker 基础镜像：`registry.cn-hangzhou.aliyuncs.com/acs/debian:bookworm-slim`
+- Docker 基础镜像：`docker.m.daocloud.io/library/debian:bookworm-slim`
 - Debian APT 镜像：`mirrors.aliyun.com`
 - GitHub 下载代理：`https://gh-proxy.org/`
 
