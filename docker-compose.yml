@@ -16,6 +16,6 @@ services:
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
       GH_PROXY: ${GH_PROXY:-https://gh-proxy.org/}
-      MCIS_TAG: ${MCIS_TAG:-v0.2.3}
+      MCIS_TAG: ${MCIS_TAG:-v0.2.4}
     volumes:
       - ./data:/data

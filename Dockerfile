@@ -8,7 +8,10 @@ COPY cfip_runner.py ./
 COPY docker ./docker
 COPY web ./web
 
-RUN chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git golang \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh
 
 ENV TZ=Asia/Shanghai \
     PORT=9527 \
@@ -17,7 +20,7 @@ ENV TZ=Asia/Shanghai \
     CRON_FILE=/data/cron/cfip.cron \
     LOG_FILE=/data/logs/cron.log \
     GH_PROXY=https://gh-proxy.org/ \
-    MCIS_TAG=v0.2.3
+    MCIS_TAG=v0.2.4
 
 EXPOSE 9527
 VOLUME ["/data"]

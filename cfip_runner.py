@@ -70,7 +70,40 @@ def ensure_mcis():
     mcis_bin = PROJECT_DIR / "montecarlo-ip-searcher"
     want_version = PROJECT_DIR / ".mcis_version"
     current_version = want_version.read_text(encoding="utf-8").strip() if want_version.exists() else ""
-    if (not mcis_bin.exists()) or current_version != MCIS_TAG:
+
+    def build_from_source():
+        log(f"[*] 当前 release 二进制能力不足，开始从上游源码编译 {MCIS_TAG}")
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            repo_dir = td_path / "montecarlo-ip-searcher"
+            raw_tar = f"https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/tags/{MCIS_TAG}.tar.gz"
+            tgz = td_path / f"{MCIS_TAG}.tar.gz"
+            fetch_with_fallback(raw_tar, tgz, timeout=120)
+            with tarfile.open(tgz, "r:gz") as tar:
+                tar.extractall(td_path)
+            extracted = td_path / f"montecarlo-ip-searcher-{MCIS_TAG.lstrip('v')}"
+            if extracted.exists() and not repo_dir.exists():
+                extracted.rename(repo_dir)
+            env = os.environ.copy()
+            env["CGO_ENABLED"] = "0"
+            env["GOOS"] = "linux"
+            env["GOARCH"] = "amd64" if mcis_arch == "amd64" else "arm64"
+            out_bin = td_path / "mcis-built"
+            subprocess.run(
+                ["go", "build", "-trimpath", "-ldflags", "-s -w", "-o", str(out_bin), "./cmd/mcis"],
+                cwd=repo_dir,
+                env=env,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            shutil.copy2(out_bin, mcis_bin)
+            mcis_bin.chmod(0o755)
+            want_version.write_text(f"{MCIS_TAG}+source", encoding="utf-8")
+            log(f"[✓] 已从源码编译并替换 mcis: {MCIS_TAG}")
+
+    if (not mcis_bin.exists()) or current_version not in (MCIS_TAG, f"{MCIS_TAG}+source"):
         pkg = f"mcis-{MCIS_TAG}-linux-{mcis_arch}.tar.gz"
         raw_url = f"https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/{MCIS_TAG}/{pkg}"
         with tempfile.TemporaryDirectory() as td:
@@ -85,6 +118,9 @@ def ensure_mcis():
                 src.rename(mcis_bin)
             mcis_bin.chmod(0o755)
             want_version.write_text(MCIS_TAG, encoding="utf-8")
+
+    if not mcis_supports_flag(mcis_bin, "-download-mode"):
+        build_from_source()
 
     for name in ("ipv4cidr.txt", "ipv6cidr.txt"):
         p = PROJECT_DIR / name
