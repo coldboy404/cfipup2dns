@@ -22,7 +22,7 @@
 > 适合国内机器，默认已经配置了加速源。
 
 ```bash
-git clone https://gh-proxy.com/https://github.com/coldboy404/cfipup2dns.git
+git clone https://gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 docker compose up -d --build
 ```
