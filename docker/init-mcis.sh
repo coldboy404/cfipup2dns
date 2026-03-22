@@ -88,7 +88,7 @@ for name in ipv4cidr.txt ipv6cidr.txt; do
   fi
 done
 
-"$MCIS_BIN" -h | grep -q -- '-download-mode' || {
+"$MCIS_BIN" -h 2>&1 | grep -q -- '-download-mode' || {
   log "[错误] 当前 mcis 不支持 -download-mode"
   exit 1
 }

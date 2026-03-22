@@ -9,7 +9,9 @@ PORT="${PORT:-9527}"
 
 mkdir -p "$PROJECT_DIR" "$(dirname "$CRON_FILE")" "$LOG_DIR"
 
-/opt/cfipup2dns/docker/init-mcis.sh
+if ! /opt/cfipup2dns/docker/init-mcis.sh >> /data/logs/init-mcis.log 2>&1; then
+  printf '%s\n' "[警告] mcis 初始化失败，Web 面板仍会启动；请查看 /data/logs/init-mcis.log" >> /data/logs/init-mcis.log
+fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
   cp /opt/cfipup2dns/config.example.json "$CONFIG_FILE"

@@ -386,7 +386,10 @@ class Handler(BaseHTTPRequestHandler):
             file_logs = ""
             if LOG_FILE.exists():
                 file_logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-300:]).strip()
-            combined = "\n\n".join([p for p in [live_logs, file_logs] if p]).strip()
+            init_logs = ""
+            if INIT_LOG_FILE.exists():
+                init_logs = "\n".join(INIT_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:]).strip()
+            combined = "\n\n".join([p for p in [live_logs, init_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
             return json_response(self, {"ok": True, **LAST_RUN})
