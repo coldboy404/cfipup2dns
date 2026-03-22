@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        BASE_IMAGE: docker.m.daocloud.io/library/debian:bookworm-slim
         APT_MIRROR: mirrors.ustc.edu.cn
     container_name: cfipup2dns
     restart: unless-stopped
@@ -15,10 +16,6 @@ services:
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
       GH_PROXY: https://gh-proxy.org/
-      MCIS_TAG: v0.2.3
-    volumes:
-      - ./data:/data
-h-proxy.com/
       MCIS_TAG: v0.2.3
     volumes:
       - ./data:/data
