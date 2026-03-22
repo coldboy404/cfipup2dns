@@ -1,4 +1,9 @@
+FROM golang:1.24-bookworm AS go-toolchain
+
 FROM python:3.11-slim
+
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 WORKDIR /opt/cfipup2dns
 
@@ -8,10 +13,7 @@ COPY cfip_runner.py ./
 COPY docker ./docker
 COPY web ./web
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git golang \
-    && rm -rf /var/lib/apt/lists/* \
-    && chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh
+RUN chmod +x /opt/cfipup2dns/cfip.sh /opt/cfipup2dns/docker/entrypoint.sh /opt/cfipup2dns/docker/up.sh
 
 ENV TZ=Asia/Shanghai \
     PORT=9527 \
