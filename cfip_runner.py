@@ -22,6 +22,12 @@ CONCURRENCY = os.getenv("CONCURRENCY", "200")
 TIMEOUT = os.getenv("TIMEOUT", "3s")
 ROUNDS = os.getenv("ROUNDS", "4")
 BUDGET = os.getenv("BUDGET", "3000")
+MCIS_HOST = os.getenv("MCIS_HOST", "").strip()
+MCIS_PATH = os.getenv("MCIS_PATH", "/cdn-cgi/trace").strip() or "/cdn-cgi/trace"
+HEADS_V4 = os.getenv("HEADS_V4", "4")
+HEADS_V6 = os.getenv("HEADS_V6", "16")
+BUDGET_V6 = os.getenv("BUDGET_V6", "4000")
+CONCURRENCY_V6 = os.getenv("CONCURRENCY_V6", "100")
 DOWNLOAD_TOP = os.getenv("DOWNLOAD_TOP", "20")
 DOWNLOAD_TIMEOUT = os.getenv("DOWNLOAD_TIMEOUT", "45s")
 DOWNLOAD_MODE = os.getenv("DOWNLOAD_MODE", "sequential")
@@ -176,14 +182,23 @@ def run_mode(mode, cfg, mcis_bin):
         return
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
+    domain = str(cfg.get("cloudflare", {}).get("domain", "") or "").strip()
+    host = MCIS_HOST or domain or "example.com"
+    heads = HEADS_V6 if mode == "6" else HEADS_V4
+    budget = BUDGET_V6 if mode == "6" else BUDGET
+    concurrency = CONCURRENCY_V6 if mode == "6" else CONCURRENCY
+
     args = [
         str(mcis_bin),
         "-cidr-file", str(cidr_file),
-        "-concurrency", CONCURRENCY,
+        "-concurrency", concurrency,
         "-top", str(max(TOP_TEST, TOP_N)),
         "-out", "jsonl",
         "-v",
-        "-budget", BUDGET,
+        "-budget", budget,
+        "-heads", heads,
+        "-host", host,
+        "-path", MCIS_PATH,
         "-timeout", TIMEOUT,
         "-rounds", ROUNDS,
     ]
@@ -197,7 +212,8 @@ def run_mode(mode, cfg, mcis_bin):
             args += ["-download-bytes", DOWNLOAD_BYTES]
 
     log(f"[*] 开始优选 IPv{mode}")
-    log(f"[*] 并发: {CONCURRENCY}，轮次: {ROUNDS}，预算: {BUDGET}，测速模式: {DOWNLOAD_MODE}")
+    log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
+    log(f"[*] 探测 Host/Path: {host}{MCIS_PATH}")
     with open(result_file, "w", encoding="utf-8") as out:
         try:
             subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)

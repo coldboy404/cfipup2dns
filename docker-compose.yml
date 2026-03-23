@@ -19,6 +19,12 @@ services:
       MCIS_REF: ${MCIS_REF:-main}
       TIMEOUT: ${TIMEOUT:-6s}
       ROUNDS: ${ROUNDS:-6}
+      MCIS_HOST: ${MCIS_HOST:-}
+      MCIS_PATH: ${MCIS_PATH:-/cdn-cgi/trace}
+      HEADS_V4: ${HEADS_V4:-4}
+      HEADS_V6: ${HEADS_V6:-16}
+      BUDGET_V6: ${BUDGET_V6:-4000}
+      CONCURRENCY_V6: ${CONCURRENCY_V6:-100}
       DOWNLOAD_TOP: ${DOWNLOAD_TOP:-8}
       DOWNLOAD_TIMEOUT: ${DOWNLOAD_TIMEOUT:-90s}
       DOWNLOAD_MODE: ${DOWNLOAD_MODE:-sequential}
