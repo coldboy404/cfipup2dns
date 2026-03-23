@@ -120,65 +120,6 @@ def cf_request(method, path, token, payload=None):
     return obj
 
 
-def can_probe_host(host, path, prefer_ipv6=False):
-    # 使用 Python 原生 urllib (强绑定 socket 协议族) 以免依赖 curl/wget
-    class ForceIPHandler(urllib.request.HTTPHandler):
-        def http_open(self, req):
-            return self.do_open(ForceIPConnection, req)
-    class ForceHTTPSHandler(urllib.request.HTTPSHandler):
-        def https_open(self, req):
-            return self.do_open(ForceHTTPSConnection, req, context=ssl._create_unverified_context())
-
-    import http.client
-    family = socket.AF_INET6 if prefer_ipv6 else socket.AF_INET
-
-    class ForceHTTPSConnection(http.client.HTTPSConnection):
-        def connect(self):
-            self.sock = socket.create_connection((self.host, self.port), self.timeout, self.source_address)
-            # 强制按指定协议族解析，若解析失败直接抛异常
-            infos = socket.getaddrinfo(self.host, self.port, family, socket.SOCK_STREAM)
-            if not infos:
-                raise Exception("No address found")
-            ip = infos[0][4][0]
-            self.sock = socket.socket(family, socket.SOCK_STREAM)
-            self.sock.settimeout(self.timeout)
-            self.sock.connect((ip, self.port))
-            if self._tunnel_host:
-                self._tunnel()
-            self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
-
-    try:
-        opener = urllib.request.build_opener(ForceHTTPSHandler)
-        req = urllib.request.Request(f"https://{host}{path}", method="HEAD", headers={"User-Agent": "cfipup2dns"})
-        with opener.open(req, timeout=PROBE_VALIDATE_TIMEOUT) as resp:
-            return True, f"HTTP {resp.status}"
-    except urllib.error.HTTPError as e:
-        return True, f"HTTP {e.code}" # HTTP 错误代表网络通了
-    except Exception as e:
-        return False, str(e)
-
-
-def resolve_probe_target(mode, preferred_host, path):
-    if mode != "6":
-        return preferred_host, False
-
-    ok, detail = can_probe_host(preferred_host, path, prefer_ipv6=True)
-    if ok:
-        return preferred_host, False
-
-    fallback = PROBE_FALLBACK_HOST
-    if fallback and fallback != preferred_host:
-        ok2, detail2 = can_probe_host(fallback, path, prefer_ipv6=True)
-        if ok2:
-            log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}），已回退到 {fallback}{path}")
-            return fallback, True
-        log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}），回退目标 {fallback}{path} 仍不可用（{detail2}）")
-    else:
-        log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}）")
-
-    return preferred_host, False
-
-
 def parse_json_lines(path):
     rows = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -246,8 +187,7 @@ def run_mode(mode, cfg, mcis_bin):
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
     domain = str(cfg.get("cloudflare", {}).get("domain", "") or "").strip()
-    preferred_host = MCIS_HOST or domain or PROBE_FALLBACK_HOST
-    host, used_fallback_host = resolve_probe_target(mode, preferred_host, MCIS_PATH)
+    host = MCIS_HOST or PROBE_FALLBACK_HOST
     heads = HEADS_V6 if mode == "6" else HEADS_V4
     budget = BUDGET_V6 if mode == "6" else BUDGET
     concurrency = CONCURRENCY_V6 if mode == "6" else CONCURRENCY
@@ -278,8 +218,6 @@ def run_mode(mode, cfg, mcis_bin):
     log(f"[*] 开始优选 IPv{mode}")
     log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
     log(f"[*] 探测 Host/Path: {host}{MCIS_PATH}")
-    if used_fallback_host:
-        log(f"[!] IPv{mode} 已自动切换到回退探测目标，DNS 仍会写回 {domain}")
     with open(result_file, "w", encoding="utf-8") as out:
         try:
             subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)
