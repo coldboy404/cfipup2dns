@@ -30,18 +30,18 @@
 
 ## 快速部署
 
-推荐直接使用docker部署
+推荐直接使用 docker 部署
 （国内建议先挂代理部署，优选时关闭代理）：
 
 ```bash
-git clone https://github.com/coldboy404/cfipup2dns.git
+git clone --depth 1 https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash docker/up.sh
 ```
 
 如果国内服务器拉取 GitHub 慢，可以使用代理：
 ```bash
-git clone https://ghproxy.net/https://github.com/coldboy404/cfipup2dns.git
+git clone --depth 1 https://ghproxy.net/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash docker/up.sh
 ```
