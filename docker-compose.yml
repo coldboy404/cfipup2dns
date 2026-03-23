@@ -8,8 +8,7 @@ services:
         APT_MIRROR: ${APT_MIRROR:-}
     container_name: cfipup2dns
     restart: unless-stopped
-    ports:
-      - "9527:9527"
+    network_mode: "host"
     environment:
       TZ: Asia/Shanghai
       PORT: 9527
