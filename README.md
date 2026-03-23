@@ -30,7 +30,7 @@
 
 ## 快速部署
 
-推荐直接使用（部署可能较慢，建议先挂代理部署，优选时关闭代理）：
+推荐直接使用（国内建议先挂代理部署，优选时关闭代理）：
 
 ```bash
 git clone https://gh-proxy.org/https://github.com/coldboy404/cfipup2dns.git
