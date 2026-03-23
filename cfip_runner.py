@@ -2,8 +2,10 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,16 +35,48 @@ DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "")
 DOWNLOAD_BYTES = os.getenv("DOWNLOAD_BYTES", "50000000")
 MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
 PROBE_FALLBACK_HOST = os.getenv("PROBE_FALLBACK_HOST", "example.com").strip() or "example.com"
+HTTP_RETRIES = int(os.getenv("HTTP_RETRIES", "4"))
+HTTP_RETRY_DELAY = float(os.getenv("HTTP_RETRY_DELAY", "1.5"))
 
 
 def log(msg):
     print(msg, flush=True)
 
 
+def _is_retryable_error(exc):
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 409, 425, 429, 500, 502, 503, 504)
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (ConnectionResetError, TimeoutError, socket.timeout, OSError, EOFError)):
+            return True
+        return "reset by peer" in str(reason).lower() or "temporarily unavailable" in str(reason).lower()
+    return isinstance(exc, (ConnectionResetError, TimeoutError, socket.timeout, OSError, EOFError))
+
+
+def _with_retries(op_name, func, retries=HTTP_RETRIES, base_delay=HTTP_RETRY_DELAY):
+    last_err = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            return func()
+        except Exception as e:
+            last_err = e
+            if attempt >= max(1, retries) or not _is_retryable_error(e):
+                raise
+            delay = base_delay * attempt
+            log(f"[!] {op_name} 失败，第 {attempt}/{retries} 次重试前等待 {delay:.1f}s: {e}")
+            time.sleep(delay)
+    raise last_err
+
+
 def fetch(url, dest, timeout=120):
     req = urllib.request.Request(url, headers={"User-Agent": "cfipup2dns/2.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as f:
-        shutil.copyfileobj(resp, f)
+
+    def _do_fetch():
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as f:
+            shutil.copyfileobj(resp, f)
+
+    return _with_retries(f"下载 {url}", _do_fetch)
 
 
 def fetch_with_fallback(raw_url, dest, timeout=120):
@@ -108,11 +142,15 @@ def cf_request(method, path, token, payload=None):
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        obj = json.loads(resp.read().decode("utf-8"))
-    if not obj.get("success"):
-        raise RuntimeError(json.dumps(obj, ensure_ascii=False))
-    return obj
+
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            obj = json.loads(resp.read().decode("utf-8"))
+        if not obj.get("success"):
+            raise RuntimeError(json.dumps(obj, ensure_ascii=False))
+        return obj
+
+    return _with_retries(f"Cloudflare API {method} {path}", _do_request)
 
 
 def normalize_records(cfg):

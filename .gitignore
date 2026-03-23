@@ -4,3 +4,6 @@
 .wget-hsts
 .cache/
 .config/
+__pycache__/
+web/__pycache__/
+*.pyc

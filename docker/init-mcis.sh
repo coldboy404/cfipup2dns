@@ -16,11 +16,26 @@ fetch() {
   url="$1"
   dest="$2"
   python3 - "$url" "$dest" <<'PY'
-import shutil, sys, urllib.request
+import shutil, socket, sys, time, urllib.error, urllib.request
 url, dest = sys.argv[1], sys.argv[2]
 req = urllib.request.Request(url, headers={"User-Agent": "cfipup2dns/2.0"})
-with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
-    shutil.copyfileobj(resp, f)
+last_err = None
+for attempt in range(1, 5):
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        sys.exit(0)
+    except Exception as e:
+        last_err = e
+        retryable = isinstance(e, (urllib.error.URLError, ConnectionResetError, TimeoutError, socket.timeout, OSError, EOFError))
+        if isinstance(e, urllib.error.HTTPError):
+            retryable = e.code in (408, 409, 425, 429, 500, 502, 503, 504)
+        if not retryable or attempt >= 4:
+            raise
+        delay = 1.5 * attempt
+        print(f"[!] 下载失败，第 {attempt}/4 次重试前等待 {delay:.1f}s: {e}", flush=True)
+        time.sleep(delay)
+raise last_err
 PY
 }
 
