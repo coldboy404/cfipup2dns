@@ -163,6 +163,6 @@ docker compose down
 
 ## 作者与说明
 
-- 作者：**coldboy404**
+- 作者：**coldboy404**、**gemini**、**chatgpt**
 - 说明：本项目用于 Cloudflare DNS 优选 IP 自动更新，重点优化国内服务器的一键部署和面板化管理体验。
 - 特别鸣谢：上游项目 GitHub: https://github.com/Leo-Mu/montecarlo-ip-searcher
