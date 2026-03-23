@@ -41,7 +41,7 @@ bash docker/up.sh
 
 如果国内服务器拉取 GitHub 慢，可以使用代理：
 ```bash
-git clone --depth 1 https://ghproxy.net/https://github.com/coldboy404/cfipup2dns.git
+git clone --depth 1 https://ghproxy.org/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash docker/up.sh
 ```
