@@ -23,25 +23,25 @@
 
 ## 界面预览
 
-![截图1](https://raw.githubusercontent.com/coldboy404/cfipup2dns/assets/assets/screenshot-1.jpg)
-![截图2](https://raw.githubusercontent.com/coldboy404/cfipup2dns/assets/assets/screenshot-2.jpg)
+![截图1](assets/screenshot-1.jpg)
+![截图2](assets/screenshot-2.jpg)
 
 ---
 
 ## 快速部署
 
-推荐直接使用 docker 部署
+推荐直接使用docker部署
 （国内建议先挂代理部署，优选时关闭代理）：
 
 ```bash
-git clone --depth 1 https://github.com/coldboy404/cfipup2dns.git
+git clone https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash docker/up.sh
 ```
 
 如果国内服务器拉取 GitHub 慢，可以使用代理：
 ```bash
-git clone --depth 1 https://ghproxy.org/https://github.com/coldboy404/cfipup2dns.git
+git clone https://ghproxy.net/https://github.com/coldboy404/cfipup2dns.git
 cd cfipup2dns
 bash docker/up.sh
 ```
