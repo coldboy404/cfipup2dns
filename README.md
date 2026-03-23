@@ -23,8 +23,8 @@
 
 ## 界面预览
 
-![截图1](assets/screenshot-1.jpg)
-![截图2](assets/screenshot-2.jpg)
+![截图1](https://raw.githubusercontent.com/coldboy404/cfipup2dns/assets/assets/screenshot-1.jpg)
+![截图2](https://raw.githubusercontent.com/coldboy404/cfipup2dns/assets/assets/screenshot-2.jpg)
 
 ---
 
