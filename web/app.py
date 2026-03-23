@@ -438,6 +438,15 @@ def trigger_run(env=None):
 
 
 def run_job(env):
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 1024 * 1024:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                f.writelines(lines[-500:])
+    except Exception as e:
+        print(f"Log cleanup failed: {e}", flush=True)
+
     LAST_RUN.update({
         "running": True,
         "code": None,
