@@ -40,7 +40,8 @@
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input, select, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
+    input, select, textarea, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
+    textarea { min-height: 132px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.5; }
     button { background: linear-gradient(135deg, var(--primary), var(--primary-2)); border: none; font-weight: 700; cursor: pointer; color: #fff; }
     button.secondary { background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--text); }
     button.warn { background: linear-gradient(135deg, #eea867, #f5bb7a); color: #fff; }
@@ -88,15 +89,14 @@
               <label for="token">API Token</label>
               <input id="token" type="password" value="{{CF_TOKEN}}" />
             </div>
-            <div class="row-2">
-              <div>
-                <label for="zoneId">Zone ID</label>
-                <input id="zoneId" value="{{CF_ZONE_ID}}" />
-              </div>
-              <div>
-                <label for="domain">域名</label>
-                <input id="domain" value="{{CF_DOMAIN}}" />
-              </div>
+            <div>
+              <label for="records">多域名配置</label>
+              <textarea id="records" placeholder="一行一个域名，例如：&#10;cf1.example.com&#10;cf2.example.com&#10;&#10;如需手动指定 Zone ID，可写成：&#10;cf3.example.com|zone_id_xxx">{{CF_RECORDS}}</textarea>
+            </div>
+            <div class="hint">
+              一行一个域名。<br>
+              默认会自动获取 Zone ID，不用手填。<br>
+              如果你想强制指定，也可以写成：<code>域名|zone_id</code>
             </div>
             <div class="row-2">
               <div>
@@ -200,8 +200,7 @@ let isLogsFocused = false;
 function collectConfig() {
   return {
     token: document.getElementById('token').value.trim(),
-    zone_id: document.getElementById('zoneId').value.trim(),
-    domain: document.getElementById('domain').value.trim(),
+    records_text: document.getElementById('records').value,
     ttl: Number(document.getElementById('ttl').value || 60),
     proxied: document.getElementById('proxied').checked,
   };
@@ -209,8 +208,7 @@ function collectConfig() {
 
 function applyForm(form) {
   document.getElementById('token').value = form.token || '';
-  document.getElementById('zoneId').value = form.zone_id || '';
-  document.getElementById('domain').value = form.domain || '';
+  document.getElementById('records').value = form.records_text || '';
   document.getElementById('ttl').value = form.ttl || 60;
   document.getElementById('proxied').checked = !!form.proxied;
 }
@@ -225,7 +223,7 @@ function applySchedule(schedule) {
 
 async function saveConfig() {
   const payload = collectConfig();
-  if (!payload.token || !payload.zone_id || !payload.domain) return alert('必填项不能为空');
+  if (!payload.token || !payload.records_text.trim()) return alert('API Token 和多域名配置不能为空');
   const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const j = await r.json();
   if (!j.ok) return alert('保存失败');
@@ -296,7 +294,6 @@ async function loadBestIps() {
   renderRunStateMeta(j.updated_at, j.next_run_at);
   const updated = renderBestIps(j.result || []);
   if (!updated) {
-    // 保持上一次显示的优选 IP，不用空数据覆盖
   }
 }
 

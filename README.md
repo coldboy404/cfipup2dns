@@ -11,6 +11,8 @@
 - ✅ 在线查看运行日志
 - ✅ 展示已优选出的 IPv4 / IPv6、下载速度、延迟
 - ✅ 默认接入上游 `montecarlo-ip-searcher` 的较新版本与顺序测速模式
+- ✅ 支持多域名同步更新 DNS
+- ✅ Zone ID 自动识别，无需手填
 
 ---
 
@@ -58,16 +60,53 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 
 ---
 
+## Cloudflare API Token 所需权限
+
+建议至少赋予下面这些权限：
+
+- **Zone / Zone / Read**
+- **Zone / DNS / Edit**
+
+说明：
+
+- `Zone / Zone / Read`：用于根据域名自动获取对应的 Zone ID
+- `Zone / DNS / Edit`：用于删除旧记录、写入新的优选 IP 记录
+
+如果你的 Token 没有 `Zone / Zone / Read`，那就无法自动识别 Zone ID，只能手动填。
+
+---
+
 ## Web 面板功能
 
 ### 1. Cloudflare 配置
 可在页面直接配置并保存：
 
 - API Token
-- Zone ID
-- 域名
+- 多域名配置
 - TTL
 - CDN小黄云
+
+多域名配置支持：
+
+- **一行一个域名**
+- 默认自动识别 Zone ID
+- 如需手动指定，也支持 `域名|zone_id`
+
+示例：
+
+```text
+cf1.example.com
+cf2.example.com
+cf3.example.net
+```
+
+如果你想手动指定某一条的 Zone ID：
+
+```text
+cf1.example.com
+cf2.example.com|2d4f6f8axxxxxxxxxxxxxxxxxxxx
+cf3.example.net
+```
 
 ### 2. 立即执行
 支持手动触发优选：
@@ -85,6 +124,8 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 - 下载速度
 - 延迟
 
+同时会把优选结果同步上传到你配置的**多个域名**的 DNS 记录。
+
 ### 3. 定时任务
 支持页面直接设置：
 
@@ -99,12 +140,43 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 
 ---
 
+## 配置文件示例
+
+```json
+{
+  "cloudflare": {
+    "token": "你的_CF_TOKEN_填在这里",
+    "ttl": 60,
+    "proxied": false,
+    "records": [
+      {
+        "domain": "cf1.example.com",
+        "zone_id": ""
+      },
+      {
+        "domain": "cf2.example.com",
+        "zone_id": ""
+      }
+    ]
+  }
+}
+```
+
+说明：
+
+- `zone_id` 留空时，程序会自动识别
+- 旧版单域名配置仍兼容，但建议迁移到 `records` 新格式
+
+---
+
 ## 与上游项目的差异
 
 本项目基于 `Leo-Mu/montecarlo-ip-searcher` 做了封装，重点增加：
 
 - WebUI 配置管理
 - Cloudflare DNS 自动写入
+- 多域名同步更新
+- Zone ID 自动识别
 - 定时任务
 - 结果持久化
 - 面板化展示

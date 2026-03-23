@@ -2,12 +2,8 @@
 import json
 import os
 import shutil
-import socket
-import ssl
 import subprocess
 import sys
-import tarfile
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,7 +33,6 @@ DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "")
 DOWNLOAD_BYTES = os.getenv("DOWNLOAD_BYTES", "50000000")
 MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
 PROBE_FALLBACK_HOST = os.getenv("PROBE_FALLBACK_HOST", "example.com").strip() or "example.com"
-PROBE_VALIDATE_TIMEOUT = int(os.getenv("PROBE_VALIDATE_TIMEOUT", "8"))
 
 
 def log(msg):
@@ -120,6 +115,58 @@ def cf_request(method, path, token, payload=None):
     return obj
 
 
+def normalize_records(cfg):
+    cf = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
+    records = []
+    raw_records = cf.get("records") or []
+    if isinstance(raw_records, list):
+        for item in raw_records:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain", "") or "").strip()
+            if not domain:
+                continue
+            records.append({
+                "domain": domain,
+                "zone_id": str(item.get("zone_id", "") or "").strip(),
+            })
+    if not records:
+        domain = str(cf.get("domain", "") or "").strip()
+        zone_id = str(cf.get("zone_id", "") or "").strip()
+        if domain:
+            records.append({"domain": domain, "zone_id": zone_id})
+    uniq = []
+    seen = set()
+    for item in records:
+        key = item["domain"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(item)
+    return uniq
+
+
+def resolve_zone_id(token, domain, manual_zone_id=""):
+    manual_zone_id = str(manual_zone_id or "").strip()
+    if manual_zone_id:
+        return manual_zone_id
+    labels = [x for x in domain.split(".") if x]
+    if len(labels) < 2:
+        raise RuntimeError(f"域名格式不合法，无法自动识别 Zone ID: {domain}")
+    for i in range(len(labels) - 1):
+        zone_name = ".".join(labels[i:])
+        q = urllib.parse.urlencode({"name": zone_name, "status": "active", "match": "all", "per_page": 1})
+        data = cf_request("GET", f"/zones?{q}", token)
+        result = data.get("result", []) or []
+        if result:
+            zone = result[0]
+            zid = str(zone.get("id", "") or "").strip()
+            zname = str(zone.get("name", "") or "").strip().lower()
+            if zid and zname == zone_name.lower():
+                return zid
+    raise RuntimeError(f"自动获取 Zone ID 失败: {domain}，请检查 Token 权限或域名是否在当前账号下")
+
+
 def parse_json_lines(path):
     rows = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -142,7 +189,6 @@ def parse_json_lines(path):
             continue
         seen.add(ip)
 
-        # latency_ms 在上游不一定存在，兜底 total/ttfb/connect；<=0 一律视为无效
         latency = row.get("latency_ms")
         if latency in (None, "", 0, "0"):
             latency = row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
@@ -152,7 +198,6 @@ def parse_json_lines(path):
         except Exception:
             row["latency_ms"] = None
 
-        # 统一布尔化，避免字符串/数字混用导致误判
         row_ok = row.get("ok")
         if isinstance(row_ok, str):
             row_ok = row_ok.strip().lower() in ("1", "true", "yes", "ok")
@@ -160,7 +205,6 @@ def parse_json_lines(path):
 
         uniq.append(row)
 
-    # 优先使用下载测速成功的结果（与上游 DNS 上传逻辑一致：只认 download_ok/download_mbps）
     dl = [
         r for r in uniq
         if r.get("ok") and float(r.get("download_mbps") or 0) > 0
@@ -169,13 +213,36 @@ def parse_json_lines(path):
         dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
         return "download_mbps", dl[:TOP_N]
 
-    # 回退展示：保留可探测结果，便于页面排障（即使下载未测出）
     scored = [
         r for r in uniq
         if r.get("ok") and float(r.get("score_ms") or 0) > 0
     ]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
     return "score_ms", scored[:TOP_N]
+
+
+def update_dns_records(token, records, dns_type, best, ttl, proxied):
+    for item in records:
+        domain = item["domain"]
+        zone_id = resolve_zone_id(token, domain, item.get("zone_id", ""))
+        q = urllib.parse.urlencode({"type": dns_type, "name": domain})
+        log(f"[*] 正在清理 {domain} 的旧 {dns_type} 记录")
+        existing = cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
+        for rec in existing.get("result", []):
+            rid = rec.get("id")
+            if rid:
+                cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
+
+        log(f"[*] 正在写入 {domain} 的新 {dns_type} 记录，共 {len(best)} 条")
+        for row in best:
+            cf_request("POST", f"/zones/{zone_id}/dns_records", token, {
+                "type": dns_type,
+                "name": domain,
+                "content": row["ip"],
+                "ttl": ttl,
+                "proxied": proxied,
+            })
+        log(f"[✓] {domain} 的 {dns_type} 记录更新完成")
 
 
 def run_mode(mode, cfg, mcis_bin):
@@ -186,7 +253,6 @@ def run_mode(mode, cfg, mcis_bin):
         return
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
-    domain = str(cfg.get("cloudflare", {}).get("domain", "") or "").strip()
     host = MCIS_HOST or PROBE_FALLBACK_HOST
     heads = HEADS_V6 if mode == "6" else HEADS_V4
     budget = BUDGET_V6 if mode == "6" else BUDGET
@@ -238,32 +304,19 @@ def run_mode(mode, cfg, mcis_bin):
     if missing_latency:
         log(f"[!] IPv{mode} 有 {missing_latency} 个结果缺少延迟字段，已尝试用 total_ms / ttfb_ms / connect_ms 兜底")
 
-    token = cfg["cloudflare"]["token"]
-    zone_id = cfg["cloudflare"]["zone_id"]
-    domain = cfg["cloudflare"]["domain"]
-    ttl = cfg["cloudflare"].get("ttl", 60)
-    proxied = cfg["cloudflare"].get("proxied", False)
+    token = str(cfg.get("cloudflare", {}).get("token", "") or "").strip()
+    ttl = cfg.get("cloudflare", {}).get("ttl", 60)
+    proxied = cfg.get("cloudflare", {}).get("proxied", False)
+    records = normalize_records(cfg)
+    if not token:
+        raise RuntimeError("Cloudflare Token 不能为空")
+    if not records:
+        raise RuntimeError("至少要配置一个域名")
 
-    q = urllib.parse.urlencode({"type": dns_type, "name": domain})
-    log(f"[*] 正在清理旧的 {dns_type} 记录")
-    existing = cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
-    for rec in existing.get("result", []):
-        rid = rec.get("id")
-        if rid:
-            cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
-
-    log(f"[*] 正在写入新的 {dns_type} 记录，共 {len(best)} 条")
-    for row in best:
-        cf_request("POST", f"/zones/{zone_id}/dns_records", token, {
-            "type": dns_type,
-            "name": domain,
-            "content": row["ip"],
-            "ttl": ttl,
-            "proxied": proxied,
-        })
+    update_dns_records(token, records, dns_type, best, ttl, proxied)
 
     (PROJECT_DIR / f"best_ips_v{mode}.json").write_text(json.dumps({"mode": sort_mode, "result": best}, ensure_ascii=False, indent=2), encoding="utf-8")
-    log(f"[✓] IPv{mode} 已更新 {len(best)} 条 DNS 记录，排序依据: {sort_mode}")
+    log(f"[✓] IPv{mode} 已同步到 {len(records)} 个域名，排序依据: {sort_mode}")
 
 
 def main():

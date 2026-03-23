@@ -1,9 +1,17 @@
 {
   "cloudflare": {
     "token": "你的_CF_TOKEN_填在这里",
-    "zone_id": "你的_ZONE_ID_填在这里",
-    "domain": "cf.example.com",
     "ttl": 60,
-    "proxied": false
+    "proxied": false,
+    "records": [
+      {
+        "domain": "cf1.example.com",
+        "zone_id": ""
+      },
+      {
+        "domain": "cf2.example.com",
+        "zone_id": ""
+      }
+    ]
   }
 }

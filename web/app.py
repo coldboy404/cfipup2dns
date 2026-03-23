@@ -5,7 +5,7 @@ import os
 import subprocess
 import threading
 import time
-import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,6 +58,73 @@ def _cf_request(method, path, token):
     return obj
 
 
+def normalize_records(cfg):
+    cf = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
+    records = []
+    raw_records = cf.get("records") or []
+    if isinstance(raw_records, list):
+        for item in raw_records:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain", "") or "").strip()
+            if not domain:
+                continue
+            records.append({
+                "domain": domain,
+                "zone_id": str(item.get("zone_id", "") or "").strip(),
+            })
+    if not records:
+        domain = str(cf.get("domain", "") or "").strip()
+        zone_id = str(cf.get("zone_id", "") or "").strip()
+        if domain:
+            records.append({"domain": domain, "zone_id": zone_id})
+    uniq = []
+    seen = set()
+    for item in records:
+        key = item["domain"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(item)
+    return uniq
+
+
+def parse_records_text(text):
+    records = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if "|" in line:
+            domain, zone_id = line.split("|", 1)
+            records.append({"domain": domain.strip(), "zone_id": zone_id.strip()})
+        else:
+            records.append({"domain": line, "zone_id": ""})
+    uniq = []
+    seen = set()
+    for item in records:
+        domain = str(item.get("domain", "") or "").strip()
+        if not domain:
+            continue
+        key = domain.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append({"domain": domain, "zone_id": str(item.get("zone_id", "") or "").strip()})
+    return uniq
+
+
+def records_to_text(records):
+    lines = []
+    for item in records or []:
+        domain = str(item.get("domain", "") or "").strip()
+        zone_id = str(item.get("zone_id", "") or "").strip()
+        if not domain:
+            continue
+        lines.append(f"{domain}|{zone_id}" if zone_id else domain)
+    return "\n".join(lines)
+
+
 def _load_best_ips_from_file():
     items = []
     updated_at = None
@@ -83,33 +150,37 @@ def _load_best_ips_from_dns():
     cfg = load_config()
     cf = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
     token = str(cf.get("token", "") or "").strip()
-    zone_id = str(cf.get("zone_id", "") or "").strip()
-    domain = str(cf.get("domain", "") or "").strip()
-    if not token or not zone_id or not domain:
+    records = normalize_records(cfg)
+    if not token or not records:
         return {"items": [], "updated_at": None}
     items = []
     updated_at = None
-    for dns_type, version in (("A", "4"), ("AAAA", "6")):
-        q = f"type={dns_type}&name={domain}"
-        data = _cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
-        for rec in data.get("result", []) or []:
-            ip = rec.get("content")
-            if not ip:
-                continue
-            items.append({
-                "version": version,
-                "ip": ip,
-                "latency_ms": None,
-                "download_mbps": None,
-            })
-            modified = rec.get("modified_on") or rec.get("created_on")
-            if modified:
-                try:
-                    ts = datetime.fromisoformat(modified.replace("Z", "+00:00")).timestamp()
-                    if updated_at is None or ts > updated_at:
-                        updated_at = ts
-                except Exception:
-                    pass
+    for item in records:
+        zone_id = str(item.get("zone_id", "") or "").strip()
+        domain = str(item.get("domain", "") or "").strip()
+        if not zone_id or not domain:
+            continue
+        for dns_type, version in (("A", "4"), ("AAAA", "6")):
+            q = urllib.parse.urlencode({"type": dns_type, "name": domain})
+            data = _cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
+            for rec in data.get("result", []) or []:
+                ip = rec.get("content")
+                if not ip:
+                    continue
+                items.append({
+                    "version": version,
+                    "ip": ip,
+                    "latency_ms": None,
+                    "download_mbps": None,
+                })
+                modified = rec.get("modified_on") or rec.get("created_on")
+                if modified:
+                    try:
+                        ts = datetime.fromisoformat(modified.replace("Z", "+00:00")).timestamp()
+                        if updated_at is None or ts > updated_at:
+                            updated_at = ts
+                    except Exception:
+                        pass
     return {"items": items, "updated_at": updated_at}
 
 
@@ -168,6 +239,7 @@ def default_config():
             "domain": "",
             "ttl": 60,
             "proxied": False,
+            "records": [],
         }
     }
 
@@ -183,12 +255,13 @@ def load_config():
 
 def form_state(cfg):
     cloudflare = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
+    records = normalize_records(cfg)
     return {
         "token": str(cloudflare.get("token", "") or ""),
-        "zone_id": str(cloudflare.get("zone_id", "") or ""),
-        "domain": str(cloudflare.get("domain", "") or ""),
         "ttl": str(cloudflare.get("ttl", 60) or 60),
         "proxied": bool(cloudflare.get("proxied", False)),
+        "records": records,
+        "records_text": records_to_text(records),
     }
 
 
@@ -199,17 +272,24 @@ def save_config_from_form(body):
     except Exception:
         ttl = 60
     ttl = max(1, min(ttl, 86400))
+    records = parse_records_text(body.get("records_text", ""))
     cfg = {
         "cloudflare": {
             "token": str(body.get("token", "") or "").strip(),
-            "zone_id": str(body.get("zone_id", "") or "").strip(),
-            "domain": str(body.get("domain", "") or "").strip(),
             "ttl": ttl,
             "proxied": bool(body.get("proxied", False)),
+            "records": records,
         }
     }
+    if records:
+        cfg["cloudflare"]["domain"] = records[0]["domain"]
+        cfg["cloudflare"]["zone_id"] = records[0].get("zone_id", "")
+    else:
+        cfg["cloudflare"]["domain"] = ""
+        cfg["cloudflare"]["zone_id"] = ""
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None, "error": None})
     return cfg
 
 
@@ -339,10 +419,6 @@ def normalize_ip_row(version, row):
     }
 
 
-def load_selected_ips():
-    return get_selected_ips()
-
-
 def render_index():
     cfg = load_config()
     state = form_state(cfg)
@@ -351,8 +427,7 @@ def render_index():
     tpl = load_html()
     mapping = {
         "CF_TOKEN": html.escape(state["token"]),
-        "CF_ZONE_ID": html.escape(state["zone_id"]),
-        "CF_DOMAIN": html.escape(state["domain"]),
+        "CF_RECORDS": html.escape(state["records_text"]),
         "CF_TTL": html.escape(state["ttl"]),
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
         "SCHEDULE_ENABLED_CHECKED": "checked" if cron_form["enabled"] else "",
@@ -480,7 +555,6 @@ def run_job(env):
     finally:
         if proc.stdout is not None:
             proc.stdout.close()
-    # 执行完成后立刻刷新缓存，确保前端马上看到最新结果
     DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None})
     LAST_RUN.update({
         "running": False,
