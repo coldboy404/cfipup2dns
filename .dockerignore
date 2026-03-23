@@ -4,3 +4,6 @@ go/
 *.log
 *.tmp
 .DS_Store
+README.md
+assets/
+docs/
