@@ -123,6 +123,7 @@ def parse_json_lines(path):
                 continue
             if obj.get("ip"):
                 rows.append(obj)
+
     uniq = []
     seen = set()
     for row in rows:
@@ -130,15 +131,39 @@ def parse_json_lines(path):
         if ip in seen:
             continue
         seen.add(ip)
-        row["latency_ms"] = row.get("latency_ms") or row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
+
+        # latency_ms 在上游不一定存在，兜底 total/ttfb/connect；<=0 一律视为无效
+        latency = row.get("latency_ms")
+        if latency in (None, "", 0, "0"):
+            latency = row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
+        try:
+            latency = float(latency)
+            row["latency_ms"] = latency if latency > 0 else None
+        except Exception:
+            row["latency_ms"] = None
+
+        # 统一布尔化，避免字符串/数字混用导致误判
+        row_ok = row.get("ok")
+        if isinstance(row_ok, str):
+            row_ok = row_ok.strip().lower() in ("1", "true", "yes", "ok")
+        row["ok"] = bool(row_ok)
+
         uniq.append(row)
 
-    dl = [r for r in uniq if float(r.get("download_mbps") or 0) > 0]
+    # 优先使用下载测速成功的结果
+    dl = [
+        r for r in uniq
+        if r.get("ok") and r.get("latency_ms") and float(r.get("download_mbps") or 0) > 0
+    ]
     if dl:
         dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
         return "download_mbps", dl[:TOP_N]
 
-    scored = [r for r in uniq if float(r.get("score_ms") or 0) > 0]
+    # 回退到 score_ms 时，仍要求探测成功且有有效延迟，避免 0ms/未测出污染结果
+    scored = [
+        r for r in uniq
+        if r.get("ok") and r.get("latency_ms") and float(r.get("score_ms") or 0) > 0
+    ]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
     return "score_ms", scored[:TOP_N]
 

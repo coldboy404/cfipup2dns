@@ -278,11 +278,12 @@ function renderBestIps(items) {
   }
   root.innerHTML = items.map(item => {
     const speed = Number(item.download_mbps || 0);
-    const latency = item.latency_ms;
+    const latencyVal = Number(item.latency_ms);
+    const hasLatency = Number.isFinite(latencyVal) && latencyVal > 0;
     const tags = [
       `<span class="tag">IPv${item.version}</span>`,
       speed > 0 ? `<span class="tag">下载 ${formatNumber(speed)} Mbps</span>` : `<span class="tag">下载未测出</span>`,
-      latency !== null && latency !== undefined && latency !== '' ? `<span class="tag">延迟 ${formatNumber(latency)} ms</span>` : `<span class="tag">延迟未测出</span>`,
+      hasLatency ? `<span class="tag">延迟 ${formatNumber(latencyVal)} ms</span>` : `<span class="tag">延迟未测出</span>`,
     ].filter(Boolean).join('');
     return `<div class="ip-item"><div class="ip-main"><code>${item.ip}</code></div><div class="ip-tags">${tags}</div></div>`;
   }).join('');
