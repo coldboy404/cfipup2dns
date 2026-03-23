@@ -34,6 +34,8 @@ DOWNLOAD_MODE = os.getenv("DOWNLOAD_MODE", "sequential")
 DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "")
 DOWNLOAD_BYTES = os.getenv("DOWNLOAD_BYTES", "50000000")
 MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
+PROBE_FALLBACK_HOST = os.getenv("PROBE_FALLBACK_HOST", "example.com").strip() or "example.com"
+PROBE_VALIDATE_TIMEOUT = int(os.getenv("PROBE_VALIDATE_TIMEOUT", "8"))
 
 
 def log(msg):
@@ -116,6 +118,52 @@ def cf_request(method, path, token, payload=None):
     return obj
 
 
+def can_probe_host(host, path, prefer_ipv6=False):
+    target = f"https://{host}{path}"
+    curl = [
+        "curl",
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "--connect-timeout",
+        str(PROBE_VALIDATE_TIMEOUT),
+        "--max-time",
+        str(PROBE_VALIDATE_TIMEOUT),
+    ]
+    curl.append("-6" if prefer_ipv6 else "-4")
+    curl.append(target)
+    try:
+        res = subprocess.run(curl, capture_output=True, text=True, timeout=PROBE_VALIDATE_TIMEOUT + 2)
+        code = (res.stdout or "").strip()
+        ok = res.returncode == 0 and code.isdigit() and code != "000"
+        return ok, (code or res.stderr.strip() or f"curl_exit={res.returncode}")
+    except Exception as e:
+        return False, str(e)
+
+
+def resolve_probe_target(mode, preferred_host, path):
+    if mode != "6":
+        return preferred_host, False
+
+    ok, detail = can_probe_host(preferred_host, path, prefer_ipv6=True)
+    if ok:
+        return preferred_host, False
+
+    fallback = PROBE_FALLBACK_HOST
+    if fallback and fallback != preferred_host:
+        ok2, detail2 = can_probe_host(fallback, path, prefer_ipv6=True)
+        if ok2:
+            log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}），已回退到 {fallback}{path}")
+            return fallback, True
+        log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}），回退目标 {fallback}{path} 仍不可用（{detail2}）")
+    else:
+        log(f"[!] IPv6 探测目标 {preferred_host}{path} 不可用（{detail}）")
+
+    return preferred_host, False
+
+
 def parse_json_lines(path):
     rows = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -183,7 +231,8 @@ def run_mode(mode, cfg, mcis_bin):
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
     domain = str(cfg.get("cloudflare", {}).get("domain", "") or "").strip()
-    host = MCIS_HOST or domain or "example.com"
+    preferred_host = MCIS_HOST or domain or PROBE_FALLBACK_HOST
+    host, used_fallback_host = resolve_probe_target(mode, preferred_host, MCIS_PATH)
     heads = HEADS_V6 if mode == "6" else HEADS_V4
     budget = BUDGET_V6 if mode == "6" else BUDGET
     concurrency = CONCURRENCY_V6 if mode == "6" else CONCURRENCY
@@ -214,6 +263,8 @@ def run_mode(mode, cfg, mcis_bin):
     log(f"[*] 开始优选 IPv{mode}")
     log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
     log(f"[*] 探测 Host/Path: {host}{MCIS_PATH}")
+    if used_fallback_host:
+        log(f"[!] IPv{mode} 已自动切换到回退探测目标，DNS 仍会写回 {domain}")
     with open(result_file, "w", encoding="utf-8") as out:
         try:
             subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)
