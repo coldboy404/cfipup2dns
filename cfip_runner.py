@@ -150,19 +150,19 @@ def parse_json_lines(path):
 
         uniq.append(row)
 
-    # 优先使用下载测速成功的结果
+    # 优先使用下载测速成功的结果（与上游 DNS 上传逻辑一致：只认 download_ok/download_mbps）
     dl = [
         r for r in uniq
-        if r.get("ok") and r.get("latency_ms") and float(r.get("download_mbps") or 0) > 0
+        if r.get("ok") and float(r.get("download_mbps") or 0) > 0
     ]
     if dl:
         dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
         return "download_mbps", dl[:TOP_N]
 
-    # 回退到 score_ms 时，仍要求探测成功且有有效延迟，避免 0ms/未测出污染结果
+    # 回退展示：保留可探测结果，便于页面排障（即使下载未测出）
     scored = [
         r for r in uniq
-        if r.get("ok") and r.get("latency_ms") and float(r.get("score_ms") or 0) > 0
+        if r.get("ok") and float(r.get("score_ms") or 0) > 0
     ]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
     return "score_ms", scored[:TOP_N]
