@@ -2,6 +2,8 @@
 import json
 import os
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -119,26 +121,39 @@ def cf_request(method, path, token, payload=None):
 
 
 def can_probe_host(host, path, prefer_ipv6=False):
-    target = f"https://{host}{path}"
-    curl = [
-        "curl",
-        "-sS",
-        "-o",
-        "/dev/null",
-        "-w",
-        "%{http_code}",
-        "--connect-timeout",
-        str(PROBE_VALIDATE_TIMEOUT),
-        "--max-time",
-        str(PROBE_VALIDATE_TIMEOUT),
-    ]
-    curl.append("-6" if prefer_ipv6 else "-4")
-    curl.append(target)
+    # 使用 Python 原生 urllib (强绑定 socket 协议族) 以免依赖 curl/wget
+    class ForceIPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(ForceIPConnection, req)
+    class ForceHTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(ForceHTTPSConnection, req, context=ssl._create_unverified_context())
+
+    import http.client
+    family = socket.AF_INET6 if prefer_ipv6 else socket.AF_INET
+
+    class ForceHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self):
+            self.sock = socket.create_connection((self.host, self.port), self.timeout, self.source_address)
+            # 强制按指定协议族解析，若解析失败直接抛异常
+            infos = socket.getaddrinfo(self.host, self.port, family, socket.SOCK_STREAM)
+            if not infos:
+                raise Exception("No address found")
+            ip = infos[0][4][0]
+            self.sock = socket.socket(family, socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            self.sock.connect((ip, self.port))
+            if self._tunnel_host:
+                self._tunnel()
+            self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
     try:
-        res = subprocess.run(curl, capture_output=True, text=True, timeout=PROBE_VALIDATE_TIMEOUT + 2)
-        code = (res.stdout or "").strip()
-        ok = res.returncode == 0 and code.isdigit() and code != "000"
-        return ok, (code or res.stderr.strip() or f"curl_exit={res.returncode}")
+        opener = urllib.request.build_opener(ForceHTTPSHandler)
+        req = urllib.request.Request(f"https://{host}{path}", method="HEAD", headers={"User-Agent": "cfipup2dns"})
+        with opener.open(req, timeout=PROBE_VALIDATE_TIMEOUT) as resp:
+            return True, f"HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        return True, f"HTTP {e.code}" # HTTP 错误代表网络通了
     except Exception as e:
         return False, str(e)
 
