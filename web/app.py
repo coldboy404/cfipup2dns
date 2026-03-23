@@ -499,10 +499,6 @@ class Handler(BaseHTTPRequestHandler):
                 live_parts.append(f"结束时间: {datetime.fromtimestamp(LAST_RUN['ended_at']).isoformat()}")
             if LAST_RUN.get("code") is not None:
                 live_parts.append(f"退出码: {LAST_RUN['code']}")
-            if LAST_RUN.get("stdout"):
-                live_parts.append("[输出]\n" + LAST_RUN["stdout"])
-            if LAST_RUN.get("stderr"):
-                live_parts.append("[错误]\n" + LAST_RUN["stderr"])
             live_logs = "\n\n".join([p for p in live_parts if p]).strip()
             file_logs = ""
             if LOG_FILE.exists():
