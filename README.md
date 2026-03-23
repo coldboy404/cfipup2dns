@@ -67,7 +67,7 @@ cd ~/cfipup2dns && git pull --ff-only && bash docker/up.sh
 - Zone ID
 - 域名
 - TTL
-- 是否代理
+- CDN小黄云
 
 ### 2. 立即执行
 支持手动触发优选：
