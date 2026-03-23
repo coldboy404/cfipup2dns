@@ -30,7 +30,8 @@
 
 ## 快速部署
 
-推荐直接使用（国内建议先挂代理部署，优选时关闭代理）：
+推荐直接使用docker部署
+（国内建议先挂代理部署，优选时关闭代理）：
 
 ```bash
 git clone https://github.com/coldboy404/cfipup2dns.git
