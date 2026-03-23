@@ -21,6 +21,13 @@
 
 ---
 
+## 界面预览
+
+![截图1](assets/screenshot-1.jpg)
+![截图2](assets/screenshot-2.jpg)
+
+---
+
 ## 快速部署
 
 推荐直接使用：
