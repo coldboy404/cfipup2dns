@@ -6,64 +6,85 @@
   <title>cfipup2dns WebUI</title>
   <style>
     :root {
-      --bg: #f6f8fc;
-      --panel: rgba(255,255,255,.72);
-      --panel-2: rgba(255,255,255,.88);
-      --text: #24324a;
-      --muted: #6f7f98;
-      --line: rgba(122, 142, 179, .18);
-      --primary: #6f9df6;
-      --primary-2: #8fb4ff;
-      --warn: #f3a85b;
-      --shadow: 0 16px 40px rgba(104, 132, 180, .16);
-      --radius: 18px;
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --card-soft: #f8fafc;
+      --text: #1f2937;
+      --muted: #64748b;
+      --line: #e5e7eb;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --warn: #f59e0b;
+      --warn-hover: #d97706;
+      --ok: #16a34a;
+      --danger: #dc2626;
+      --shadow: 0 10px 28px rgba(15, 23, 42, .08);
+      --radius: 14px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: linear-gradient(180deg, #fffdfc 0%, #f7f9ff 38%, #eef4ff 100%);
+      background: var(--bg);
       color: var(--text);
+      line-height: 1.5;
     }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 32px; }
-    .hero { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
-    .hero h1 { margin: 0 0 6px; font-size: 30px; }
-    .hero p { margin: 0; color: var(--muted); }
-    .hero a { color: #76a7ff; text-decoration: none; }
-    .badge-row { display: flex; gap: 10px; flex-wrap: wrap; }
-    .badge { padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 13px; }
-    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 16px; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 36px; }
+    .hero {
+      display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+      margin-bottom: 18px; padding: 18px 20px; background: var(--card); border: 1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .hero h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.02em; }
+    .hero p { margin: 0; color: var(--muted); font-size: 14px; }
+    .hero a { color: var(--primary); text-decoration: none; }
+    .hero a:hover { text-decoration: underline; }
+    .badge-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .badge { padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card-soft); color: var(--muted); font-size: 12px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 16px; align-items: start; }
     .stack { display: grid; gap: 16px; }
-    .card { background: linear-gradient(135deg, rgba(255,255,255,.92) 0%, rgba(245,248,255,.88) 52%, rgba(237,244,255,.84) 100%); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
-    .card h3 { margin: 0 0 14px; font-size: 18px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+    .card h3 { margin: 0 0 14px; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+    .card h3::before { content: ""; width: 4px; height: 18px; border-radius: 999px; background: var(--primary); display: inline-block; }
     .fields { display: grid; gap: 14px; }
-    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    .row-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input, select, textarea, button { width: 100%; border-radius: 12px; border: 1px solid var(--line); outline: none; background: var(--panel-2); color: var(--text); padding: 12px 14px; font-size: 14px; }
-    textarea { min-height: 132px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.5; }
-    button { background: linear-gradient(135deg, var(--primary), var(--primary-2)); border: none; font-weight: 700; cursor: pointer; color: #fff; }
-    button.secondary { background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--text); }
-    button.warn { background: linear-gradient(135deg, #eea867, #f5bb7a); color: #fff; }
-    .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 12px; border: 1px solid var(--line); }
-    .switch input { width: 18px; height: 18px; }
+    input, select, textarea, button {
+      width: 100%; border-radius: 10px; border: 1px solid var(--line); outline: none; background: #fff;
+      color: var(--text); padding: 11px 12px; font-size: 14px; transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.10); }
+    textarea { min-height: 128px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.55; }
+    button { background: var(--primary); border: none; font-weight: 700; cursor: pointer; color: #fff; }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: #fff; border: 1px solid var(--line); color: var(--text); }
+    button.secondary:hover { background: var(--card-soft); }
+    button.warn { background: var(--warn); color: #fff; }
+    button.warn:hover { background: var(--warn-hover); }
+    .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; background: var(--card-soft); border-radius: 10px; border: 1px solid var(--line); }
+    .switch input { width: 18px; height: 18px; accent-color: var(--primary); }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
-    .toolbar > * { flex: 1; min-width: 140px; }
-    .status { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); }
-    .hint { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); line-height: 1.7; }
-    details.advanced { border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.55); padding: 12px; }
-    details.advanced summary { cursor: pointer; font-weight: 700; color: #4b6288; }
-    details.advanced .fields { margin-top: 12px; }
+    .toolbar > * { flex: 1; min-width: 136px; }
+    .status { padding: 10px 12px; border-radius: 10px; background: var(--card-soft); color: var(--muted); font-size: 13px; border: 1px solid var(--line); }
+    .hint { padding: 10px 12px; border-radius: 10px; background: #f8fafc; color: var(--muted); font-size: 13px; border: 1px solid var(--line); line-height: 1.7; }
+    .hint strong { color: var(--text); }
+    details.advanced { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 0; overflow: hidden; }
+    details.advanced summary { cursor: pointer; font-weight: 700; color: var(--text); padding: 12px 14px; background: var(--card-soft); list-style-position: inside; }
+    details.advanced .fields { padding: 14px; border-top: 1px solid var(--line); }
     .ip-list { display: grid; gap: 10px; }
-    .ip-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.64); }
+    .ip-item { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fff; }
     .ip-main { margin-bottom: 8px; }
-    .ip-main code { color: #2e3f5d; font-size: 15px; }
+    .ip-main code { color: var(--text); font-size: 15px; font-weight: 700; }
     .ip-tags { display: flex; gap: 8px; flex-wrap: wrap; }
-    .tag { border-radius: 999px; padding: 4px 8px; font-size: 12px; background: rgba(111,157,246,.10); color: #4b6288; border: 1px solid rgba(111,157,246,.16); }
-    pre { margin: 0; min-height: 180px; background: rgba(247,250,255,.92); color: #35506d; border-radius: 14px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid rgba(122, 142, 179, .18); }
+    .tag { border-radius: 999px; padding: 4px 8px; font-size: 12px; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    pre { margin: 0; min-height: 320px; max-height: 70vh; background: #0f172a; color: #dbeafe; border-radius: 12px; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid #111827; font-size: 12px; line-height: 1.55; }
+    .mode-help { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.65; }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       .row-2, .row-3 { grid-template-columns: 1fr; }
+      .wrap { padding: 14px 10px 24px; }
+      .hero { padding: 16px; }
     }
   </style>
 </head>
@@ -72,14 +93,14 @@
     <div class="hero">
       <div>
         <h1>cfipup2dns 控制台</h1>
-        <p>作者：coldboy404</p>
-        <p><a href="https://github.com/coldboy404/cfipup2dns" target="_blank" rel="noopener noreferrer">项目地址：https://github.com/coldboy404/cfipup2dns</a></p>
+        <p>Cloudflare 优选 IP 自动 DDNS / WebUI 管理面板</p>
+        <p><a href="https://github.com/coldboy404/cfipup2dns" target="_blank" rel="noopener noreferrer">GitHub 项目地址</a></p>
       </div>
       <div class="badge-row">
         <div class="badge">WebUI</div>
         <div class="badge">Docker</div>
         <div class="badge">Cloudflare DNS</div>
-        <div class="badge">9527</div>
+        <div class="badge">端口 9527</div>
       </div>
     </div>
 
@@ -124,7 +145,7 @@
                 </div>
                 <div class="row-3">
                   <div><label for="advDownloadTimeout">下载超时</label><input id="advDownloadTimeout" value="{{ADV_DOWNLOAD_TIMEOUT}}" placeholder="90s" /></div>
-                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>sequential</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>all</option></select></div>
+                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>顺序测速（推荐）</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>并发测速（更快）</option></select><div class="mode-help">顺序测速：逐个测速更稳；并发测速：同时测速更快，但更吃带宽。</div></div>
                   <div><label for="advMinDownload">最低下载 Mbps</label><input id="advMinDownload" type="number" min="0" step="0.1" value="{{ADV_MIN_DOWNLOAD_MBPS}}" /></div>
                 </div>
                 <div><label for="advDownloadUrl">下载测速 URL</label><input id="advDownloadUrl" value="{{ADV_DOWNLOAD_URL}}" placeholder="留空使用 mcis 默认" /></div>
@@ -137,7 +158,7 @@
                   <div><label for="advCfColo">地区码过滤</label><input id="advCfColo" value="{{ADV_CF_COLO}}" placeholder="例如 HKG,NRT,SJC" /></div>
                   <div><label>&nbsp;</label><div class="switch"><span>失败时保留旧 DNS</span><input id="advKeepLast" type="checkbox" {{ADV_KEEP_LAST_CHECKED}} /></div></div>
                 </div>
-                <div class="hint">0 表示不限制。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
+                <div class="hint"><strong>建议：</strong>下载模式默认用 sequential；0 表示不限制。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
               </div>
             </details>
             <div class="toolbar">
@@ -213,6 +234,7 @@
       <div class="stack">
         <div class="card">
           <h3>运行日志</h3>
+          <div class="hint" style="margin-bottom:12px">日志会自动刷新；鼠标移入日志区域时暂停自动滚动，方便查看。</div>
           <div class="toolbar">
             <button class="secondary" onclick="loadLogs(true)">刷新</button>
             <button class="secondary" onclick="clearLogs()">清空日志</button>
