@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +18,11 @@ CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
 CRON_FILE = Path(os.getenv("CRON_FILE", "/data/cron/cfip.cron"))
 LOG_FILE = Path(os.getenv("LOG_FILE", "/data/logs/cron.log"))
 INIT_LOG_FILE = Path("/data/logs/init-mcis.log")
+BOOT_LOG_FILE = Path("/data/logs/boot.log")
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(2 * 1024 * 1024)))
+LOG_KEEP_BYTES = int(os.getenv("LOG_KEEP_BYTES", str(512 * 1024)))
+LOG_API_TAIL_LINES = int(os.getenv("LOG_API_TAIL_LINES", "300"))
+LOG_MEMORY_MAX_BYTES = int(os.getenv("LOG_MEMORY_MAX_BYTES", "16000"))
 PORT = int(os.getenv("PORT", "9527"))
 RUN_CMD = "/opt/cfipup2dns/cfip.sh"
 BEST_IP_FILES = {
@@ -239,10 +245,64 @@ def text_response(handler, text, status=200, content_type="text/html; charset=ut
     handler.wfile.write(body)
 
 
+def _positive_int(value, default):
+    try:
+        n = int(value)
+    except Exception:
+        return default
+    return max(1, n)
+
+
+def compact_log_file(path, max_bytes=None, keep_bytes=None):
+    max_bytes = _positive_int(max_bytes if max_bytes is not None else LOG_MAX_BYTES, 2 * 1024 * 1024)
+    keep_bytes = _positive_int(keep_bytes if keep_bytes is not None else LOG_KEEP_BYTES, 512 * 1024)
+    keep_bytes = min(keep_bytes, max_bytes)
+    try:
+        path = Path(path)
+        if not path.exists() or path.stat().st_size <= max_bytes:
+            return False
+        with open(path, "rb") as f:
+            f.seek(-keep_bytes, os.SEEK_END)
+            data = f.read()
+        if b"\n" in data:
+            data = data.split(b"\n", 1)[1]
+        header = f"[日志自动清理] 原日志超过 {max_bytes} bytes，仅保留最近约 {keep_bytes} bytes，清理时间 {datetime.now().isoformat()}\n".encode("utf-8")
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            f.write(header)
+            f.write(data)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"Log cleanup failed for {path}: {e}", flush=True)
+        return False
+
+
+def read_recent_log(path, tail_lines=None, tail_bytes=None):
+    path = Path(path)
+    if not path.exists():
+        return ""
+    tail_lines = _positive_int(tail_lines if tail_lines is not None else LOG_API_TAIL_LINES, 300)
+    tail_bytes = _positive_int(tail_bytes if tail_bytes is not None else LOG_KEEP_BYTES, 512 * 1024)
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > tail_bytes:
+                f.seek(-tail_bytes, os.SEEK_END)
+            data = f.read()
+        text = data.decode("utf-8", errors="ignore")
+        lines = text.splitlines()
+        return "\n".join(lines[-tail_lines:]).strip()
+    except Exception:
+        return ""
+
+
 def append_log(text):
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    compact_log_file(LOG_FILE)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(text)
+    compact_log_file(LOG_FILE)
 
 
 def default_config():
@@ -579,14 +639,9 @@ def trigger_run(env=None):
 
 
 def run_job(env):
-    try:
-        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 1024 * 1024:
-            with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-            with open(LOG_FILE, "w", encoding="utf-8") as f:
-                f.writelines(lines[-500:])
-    except Exception as e:
-        print(f"Log cleanup failed: {e}", flush=True)
+    compact_log_file(LOG_FILE)
+    compact_log_file(INIT_LOG_FILE)
+    compact_log_file(BOOT_LOG_FILE)
 
     LAST_RUN.update({
         "running": True,
@@ -597,7 +652,9 @@ def run_job(env):
         "ended_at": None,
         "selected_ips": [],
     })
-    chunks = []
+    memory_limit = _positive_int(LOG_MEMORY_MAX_BYTES, 16000)
+    chunks = deque()
+    chunks_size = 0
     append_log(f"\n===== {datetime.now().isoformat()} 开始执行 =====\n")
     proc = subprocess.Popen(
         RUN_CMD,
@@ -614,8 +671,11 @@ def run_job(env):
                 if not line:
                     break
                 chunks.append(line)
-                current = "".join(chunks)[-16000:]
-                LAST_RUN["stdout"] = current
+                chunks_size += len(line.encode("utf-8", errors="ignore"))
+                while chunks_size > memory_limit and chunks:
+                    removed = chunks.popleft()
+                    chunks_size -= len(removed.encode("utf-8", errors="ignore"))
+                LAST_RUN["stdout"] = "".join(chunks)
                 append_log(line)
         code = proc.wait()
     finally:
@@ -625,7 +685,7 @@ def run_job(env):
     LAST_RUN.update({
         "running": False,
         "code": code,
-        "stdout": "".join(chunks)[-16000:],
+        "stdout": "".join(chunks),
         "stderr": "",
         "ended_at": time.time(),
         "selected_ips": get_selected_ips()["items"],
@@ -649,13 +709,13 @@ class Handler(BaseHTTPRequestHandler):
             if LAST_RUN.get("code") is not None:
                 live_parts.append(f"退出码: {LAST_RUN['code']}")
             live_logs = "\n\n".join([p for p in live_parts if p]).strip()
-            file_logs = ""
-            if LOG_FILE.exists():
-                file_logs = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-300:]).strip()
-            init_logs = ""
-            if INIT_LOG_FILE.exists():
-                init_logs = "\n".join(INIT_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:]).strip()
-            combined = "\n\n".join([p for p in [live_logs, init_logs, file_logs] if p]).strip()
+            compact_log_file(LOG_FILE)
+            compact_log_file(INIT_LOG_FILE)
+            compact_log_file(BOOT_LOG_FILE)
+            file_logs = read_recent_log(LOG_FILE, LOG_API_TAIL_LINES, LOG_KEEP_BYTES)
+            init_logs = read_recent_log(INIT_LOG_FILE, 200, LOG_KEEP_BYTES)
+            boot_logs = read_recent_log(BOOT_LOG_FILE, 200, LOG_KEEP_BYTES)
+            combined = "\n\n".join([p for p in [live_logs, init_logs, boot_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
             selected = get_selected_ips()
