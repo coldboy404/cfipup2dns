@@ -31,5 +31,11 @@ services:
       DOWNLOAD_MODE: ${DOWNLOAD_MODE:-sequential}
       DOWNLOAD_URL: ${DOWNLOAD_URL:-}
       DOWNLOAD_BYTES: ${DOWNLOAD_BYTES:-50000000}
+      MIN_DOWNLOAD_MBPS: ${MIN_DOWNLOAD_MBPS:-0}
+      MAX_LATENCY_MS: ${MAX_LATENCY_MS:-0}
+      MIN_LATENCY_MS: ${MIN_LATENCY_MS:-0}
+      MAX_LOSS_RATE: ${MAX_LOSS_RATE:-1}
+      CF_COLO: ${CF_COLO:-}
+      KEEP_LAST_ON_FAIL: ${KEEP_LAST_ON_FAIL:-true}
     volumes:
       - ./data:/data

@@ -13,5 +13,19 @@
         "zone_id": ""
       }
     ]
+  },
+  "advanced": {
+    "timeout": "6s",
+    "rounds": "6",
+    "download_top": "8",
+    "download_timeout": "90s",
+    "download_mode": "sequential",
+    "download_url": "",
+    "min_download_mbps": "0",
+    "max_latency_ms": "0",
+    "min_latency_ms": "0",
+    "max_loss_rate": "1",
+    "cf_colo": "",
+    "keep_last_on_fail": "true"
   }
 }

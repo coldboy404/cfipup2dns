@@ -41,6 +41,20 @@ DNS_CACHE = {
     "error": None,
 }
 DNS_CACHE_TTL = int(os.getenv("DNS_CACHE_TTL", "120"))
+ADVANCED_DEFAULTS = {
+    "timeout": os.getenv("TIMEOUT", "6s"),
+    "rounds": os.getenv("ROUNDS", "6"),
+    "download_top": os.getenv("DOWNLOAD_TOP", "8"),
+    "download_timeout": os.getenv("DOWNLOAD_TIMEOUT", "90s"),
+    "download_mode": os.getenv("DOWNLOAD_MODE", "sequential"),
+    "download_url": os.getenv("DOWNLOAD_URL", ""),
+    "min_download_mbps": os.getenv("MIN_DOWNLOAD_MBPS", "0"),
+    "max_latency_ms": os.getenv("MAX_LATENCY_MS", "0"),
+    "min_latency_ms": os.getenv("MIN_LATENCY_MS", "0"),
+    "max_loss_rate": os.getenv("MAX_LOSS_RATE", "1"),
+    "cf_colo": os.getenv("CF_COLO", ""),
+    "keep_last_on_fail": os.getenv("KEEP_LAST_ON_FAIL", "true"),
+}
 
 
 def _cf_request(method, path, token):
@@ -240,7 +254,8 @@ def default_config():
             "ttl": 60,
             "proxied": False,
             "records": [],
-        }
+        },
+        "advanced": dict(ADVANCED_DEFAULTS),
     }
 
 
@@ -256,12 +271,18 @@ def load_config():
 def form_state(cfg):
     cloudflare = cfg.get("cloudflare", {}) if isinstance(cfg, dict) else {}
     records = normalize_records(cfg)
+    advanced = dict(ADVANCED_DEFAULTS)
+    if isinstance(cfg.get("advanced"), dict):
+        for k, v in cfg.get("advanced", {}).items():
+            if k in advanced:
+                advanced[k] = str(v)
     return {
         "token": str(cloudflare.get("token", "") or ""),
         "ttl": str(cloudflare.get("ttl", 60) or 60),
         "proxied": bool(cloudflare.get("proxied", False)),
         "records": records,
         "records_text": records_to_text(records),
+        "advanced": advanced,
     }
 
 
@@ -273,13 +294,20 @@ def save_config_from_form(body):
         ttl = 60
     ttl = max(1, min(ttl, 86400))
     records = parse_records_text(body.get("records_text", ""))
+    advanced = dict(ADVANCED_DEFAULTS)
+    body_advanced = body.get("advanced", {}) if isinstance(body.get("advanced", {}), dict) else {}
+    for key in advanced:
+        if key in body_advanced:
+            advanced[key] = str(body_advanced.get(key, "") or "").strip()
+    advanced["keep_last_on_fail"] = "true" if str(advanced.get("keep_last_on_fail", "true")).lower() not in ("0", "false", "no", "off") else "false"
     cfg = {
         "cloudflare": {
             "token": str(body.get("token", "") or "").strip(),
             "ttl": ttl,
             "proxied": bool(body.get("proxied", False)),
             "records": records,
-        }
+        },
+        "advanced": advanced,
     }
     if records:
         cfg["cloudflare"]["domain"] = records[0]["domain"]
@@ -437,6 +465,19 @@ def render_index():
         "SCHEDULE_MODE_4": "selected" if cron_form["ip_mode"] == "4" else "",
         "SCHEDULE_MODE_6": "selected" if cron_form["ip_mode"] == "6" else "",
         "SCHEDULE_MODE_BOTH": "selected" if cron_form["ip_mode"] == "both" else "",
+        "ADV_TIMEOUT": html.escape(state["advanced"].get("timeout", "6s")),
+        "ADV_ROUNDS": html.escape(state["advanced"].get("rounds", "6")),
+        "ADV_DOWNLOAD_TOP": html.escape(state["advanced"].get("download_top", "8")),
+        "ADV_DOWNLOAD_TIMEOUT": html.escape(state["advanced"].get("download_timeout", "90s")),
+        "ADV_DOWNLOAD_MODE_SEQ": "selected" if state["advanced"].get("download_mode", "sequential") == "sequential" else "",
+        "ADV_DOWNLOAD_MODE_ALL": "selected" if state["advanced"].get("download_mode", "sequential") == "all" else "",
+        "ADV_DOWNLOAD_URL": html.escape(state["advanced"].get("download_url", "")),
+        "ADV_MIN_DOWNLOAD_MBPS": html.escape(state["advanced"].get("min_download_mbps", "0")),
+        "ADV_MAX_LATENCY_MS": html.escape(state["advanced"].get("max_latency_ms", "0")),
+        "ADV_MIN_LATENCY_MS": html.escape(state["advanced"].get("min_latency_ms", "0")),
+        "ADV_MAX_LOSS_RATE": html.escape(state["advanced"].get("max_loss_rate", "1")),
+        "ADV_CF_COLO": html.escape(state["advanced"].get("cf_colo", "")),
+        "ADV_KEEP_LAST_CHECKED": "checked" if state["advanced"].get("keep_last_on_fail", "true").lower() not in ("0", "false", "no", "off") else "",
     }
     return fill_template(tpl, mapping)
 
@@ -504,9 +545,34 @@ def schedule_loop():
         time.sleep(1)
 
 
+def apply_advanced_env(env):
+    cfg = load_config()
+    advanced = cfg.get("advanced", {}) if isinstance(cfg, dict) else {}
+    mapping = {
+        "timeout": "TIMEOUT",
+        "rounds": "ROUNDS",
+        "download_top": "DOWNLOAD_TOP",
+        "download_timeout": "DOWNLOAD_TIMEOUT",
+        "download_mode": "DOWNLOAD_MODE",
+        "download_url": "DOWNLOAD_URL",
+        "min_download_mbps": "MIN_DOWNLOAD_MBPS",
+        "max_latency_ms": "MAX_LATENCY_MS",
+        "min_latency_ms": "MIN_LATENCY_MS",
+        "max_loss_rate": "MAX_LOSS_RATE",
+        "cf_colo": "CF_COLO",
+        "keep_last_on_fail": "KEEP_LAST_ON_FAIL",
+    }
+    for key, env_key in mapping.items():
+        val = str(advanced.get(key, "") or "").strip()
+        if val:
+            env[env_key] = val
+    return env
+
+
 def trigger_run(env=None):
     if LAST_RUN["running"]:
         return False
+    env = apply_advanced_env(env or os.environ.copy())
     t = threading.Thread(target=run_job, args=(env or os.environ.copy(),), daemon=True)
     t.start()
     return True

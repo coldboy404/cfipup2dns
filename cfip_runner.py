@@ -37,6 +37,12 @@ MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
 PROBE_FALLBACK_HOST = os.getenv("PROBE_FALLBACK_HOST", "example.com").strip() or "example.com"
 HTTP_RETRIES = int(os.getenv("HTTP_RETRIES", "4"))
 HTTP_RETRY_DELAY = float(os.getenv("HTTP_RETRY_DELAY", "1.5"))
+KEEP_LAST_ON_FAIL = os.getenv("KEEP_LAST_ON_FAIL", "true").strip().lower() not in ("0", "false", "no", "off")
+MAX_LATENCY_MS = float(os.getenv("MAX_LATENCY_MS", "0") or 0)
+MIN_LATENCY_MS = float(os.getenv("MIN_LATENCY_MS", "0") or 0)
+MAX_LOSS_RATE = float(os.getenv("MAX_LOSS_RATE", "1") or 1)
+MIN_DOWNLOAD_MBPS = float(os.getenv("MIN_DOWNLOAD_MBPS", "0") or 0)
+CF_COLO = os.getenv("CF_COLO", "").strip().upper()
 
 
 def log(msg):
@@ -249,38 +255,140 @@ def parse_json_lines(path):
     ]
     if dl:
         dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
-        return "download_mbps", dl[:TOP_N]
+        return "download_mbps", dl
 
     scored = [
         r for r in uniq
         if r.get("ok") and float(r.get("score_ms") or 0) > 0
     ]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
-    return "score_ms", scored[:TOP_N]
+    return "score_ms", scored
+
+
+def _float_or_none(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def row_loss_rate(row):
+    for key in ("loss_rate", "loss", "lossRate", "packet_loss", "packet_loss_rate"):
+        val = _float_or_none(row.get(key))
+        if val is not None:
+            return val / 100.0 if val > 1 else val
+    sent = _float_or_none(row.get("sent") or row.get("sended") or row.get("requests"))
+    recv = _float_or_none(row.get("received") or row.get("recv") or row.get("success"))
+    if sent and sent > 0 and recv is not None:
+        return max(0.0, min(1.0, (sent - recv) / sent))
+    return None
+
+
+def row_colo(row):
+    for key in ("colo", "cf_colo", "cfcolo", "location", "pop"):
+        val = str(row.get(key, "") or "").strip().upper()
+        if val:
+            return val
+    return ""
+
+
+def apply_result_filters(rows):
+    allowed_colos = {x.strip().upper() for x in CF_COLO.split(",") if x.strip()}
+    filtered = []
+    stats = {"total": len(rows), "latency": 0, "loss": 0, "speed": 0, "colo": 0}
+    for row in rows:
+        latency = _float_or_none(row.get("latency_ms"))
+        if MAX_LATENCY_MS > 0 and latency is not None and latency > MAX_LATENCY_MS:
+            stats["latency"] += 1
+            continue
+        if MIN_LATENCY_MS > 0 and latency is not None and latency < MIN_LATENCY_MS:
+            stats["latency"] += 1
+            continue
+        loss = row_loss_rate(row)
+        if MAX_LOSS_RATE < 1 and loss is not None and loss > MAX_LOSS_RATE:
+            stats["loss"] += 1
+            continue
+        speed = _float_or_none(row.get("download_mbps")) or 0
+        if MIN_DOWNLOAD_MBPS > 0 and speed < MIN_DOWNLOAD_MBPS:
+            stats["speed"] += 1
+            continue
+        if allowed_colos:
+            colo = row_colo(row)
+            if not colo or colo not in allowed_colos:
+                stats["colo"] += 1
+                continue
+        filtered.append(row)
+    if stats["total"] != len(filtered):
+        log(f"[*] 结果过滤: 原始 {stats['total']}，保留 {len(filtered)}，延迟过滤 {stats['latency']}，丢包过滤 {stats['loss']}，速度过滤 {stats['speed']}，地区过滤 {stats['colo']}")
+    return filtered
+
+
+def load_previous_best(mode):
+    path = PROJECT_DIR / f"best_ips_v{mode}.json"
+    if not path.exists():
+        return []
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        rows = obj.get("result", []) or []
+        return [r for r in rows if r.get("ip")]
+    except Exception:
+        return []
+
+
+def cf_request_all(token, path, result_key="result"):
+    items = []
+    page = 1
+    sep = "&" if "?" in path else "?"
+    while True:
+        data = cf_request("GET", f"{path}{sep}per_page=100&page={page}", token)
+        items.extend(data.get(result_key, []) or [])
+        info = data.get("result_info") or {}
+        total_pages = int(info.get("total_pages") or 1)
+        if page >= total_pages:
+            break
+        page += 1
+    return items
 
 
 def update_dns_records(token, records, dns_type, best, ttl, proxied):
+    desired_ips = []
+    seen = set()
+    for row in best:
+        ip = str(row.get("ip", "") or "").strip()
+        if ip and ip not in seen:
+            desired_ips.append(ip)
+            seen.add(ip)
+    if not desired_ips:
+        log(f"[!] 没有可写入的 {dns_type} 记录，跳过 DNS 更新，保留现有解析")
+        return
+
     for item in records:
         domain = item["domain"]
         zone_id = resolve_zone_id(token, domain, item.get("zone_id", ""))
         q = urllib.parse.urlencode({"type": dns_type, "name": domain})
-        log(f"[*] 正在清理 {domain} 的旧 {dns_type} 记录")
-        existing = cf_request("GET", f"/zones/{zone_id}/dns_records?{q}", token)
-        for rec in existing.get("result", []):
+        existing = cf_request_all(token, f"/zones/{zone_id}/dns_records?{q}")
+        existing = [r for r in existing if str(r.get("type", "")).upper() == dns_type and str(r.get("name", "")).lower() == domain.lower()]
+        existing.sort(key=lambda r: str(r.get("created_on") or r.get("id") or ""))
+
+        log(f"[*] 正在差异同步 {domain} 的 {dns_type} 记录：现有 {len(existing)} 条，目标 {len(desired_ips)} 条")
+        for idx, ip in enumerate(desired_ips):
+            payload = {"type": dns_type, "name": domain, "content": ip, "ttl": ttl, "proxied": proxied}
+            if idx < len(existing):
+                rec = existing[idx]
+                rid = rec.get("id")
+                if rec.get("content") == ip and int(rec.get("ttl") or ttl) == int(ttl) and bool(rec.get("proxied", False)) == bool(proxied):
+                    continue
+                cf_request("PUT", f"/zones/{zone_id}/dns_records/{rid}", token, payload)
+            else:
+                cf_request("POST", f"/zones/{zone_id}/dns_records", token, payload)
+
+        for rec in existing[len(desired_ips):]:
             rid = rec.get("id")
             if rid:
                 cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
-
-        log(f"[*] 正在写入 {domain} 的新 {dns_type} 记录，共 {len(best)} 条")
-        for row in best:
-            cf_request("POST", f"/zones/{zone_id}/dns_records", token, {
-                "type": dns_type,
-                "name": domain,
-                "content": row["ip"],
-                "ttl": ttl,
-                "proxied": proxied,
-            })
-        log(f"[✓] {domain} 的 {dns_type} 记录更新完成")
+        log(f"[✓] {domain} 的 {dns_type} 记录同步完成")
 
 
 def run_mode(mode, cfg, mcis_bin):
@@ -331,7 +439,15 @@ def run_mode(mode, cfg, mcis_bin):
             raise RuntimeError(f"mcis 执行失败，IPv{mode}，退出码: {e.returncode}")
 
     sort_mode, best = parse_json_lines(result_file)
+    best = apply_result_filters(best)[:TOP_N]
     if not best:
+        previous = load_previous_best(mode) if KEEP_LAST_ON_FAIL else []
+        if previous:
+            log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，已保留旧 DNS 记录和旧结果，共 {len(previous)} 条")
+            return
+        if KEEP_LAST_ON_FAIL:
+            log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，未更新 DNS")
+            return
         raise RuntimeError(f"IPv{mode} 没有找到可用 IP")
 
     zero_speed = sum(1 for row in best if float(row.get("download_mbps") or 0) <= 0)

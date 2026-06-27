@@ -51,6 +51,9 @@
     .toolbar > * { flex: 1; min-width: 140px; }
     .status { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); }
     .hint { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.66); color: var(--muted); font-size: 13px; border: 1px solid var(--line); line-height: 1.7; }
+    details.advanced { border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.55); padding: 12px; }
+    details.advanced summary { cursor: pointer; font-weight: 700; color: #4b6288; }
+    details.advanced .fields { margin-top: 12px; }
     .ip-list { display: grid; gap: 10px; }
     .ip-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.64); }
     .ip-main { margin-bottom: 8px; }
@@ -111,6 +114,32 @@
                 </div>
               </div>
             </div>
+            <details class="advanced">
+              <summary>高级测速参数</summary>
+              <div class="fields">
+                <div class="row-3">
+                  <div><label for="advTimeout">单次超时</label><input id="advTimeout" value="{{ADV_TIMEOUT}}" placeholder="6s" /></div>
+                  <div><label for="advRounds">测速轮次</label><input id="advRounds" type="number" min="1" value="{{ADV_ROUNDS}}" /></div>
+                  <div><label for="advDownloadTop">下载测速数量</label><input id="advDownloadTop" type="number" min="0" value="{{ADV_DOWNLOAD_TOP}}" /></div>
+                </div>
+                <div class="row-3">
+                  <div><label for="advDownloadTimeout">下载超时</label><input id="advDownloadTimeout" value="{{ADV_DOWNLOAD_TIMEOUT}}" placeholder="90s" /></div>
+                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>sequential</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>all</option></select></div>
+                  <div><label for="advMinDownload">最低下载 Mbps</label><input id="advMinDownload" type="number" min="0" step="0.1" value="{{ADV_MIN_DOWNLOAD_MBPS}}" /></div>
+                </div>
+                <div><label for="advDownloadUrl">下载测速 URL</label><input id="advDownloadUrl" value="{{ADV_DOWNLOAD_URL}}" placeholder="留空使用 mcis 默认" /></div>
+                <div class="row-3">
+                  <div><label for="advMaxLatency">最大延迟 ms</label><input id="advMaxLatency" type="number" min="0" value="{{ADV_MAX_LATENCY_MS}}" /></div>
+                  <div><label for="advMinLatency">最小延迟 ms</label><input id="advMinLatency" type="number" min="0" value="{{ADV_MIN_LATENCY_MS}}" /></div>
+                  <div><label for="advMaxLoss">最大丢包率 0~1</label><input id="advMaxLoss" type="number" min="0" max="1" step="0.01" value="{{ADV_MAX_LOSS_RATE}}" /></div>
+                </div>
+                <div class="row-2">
+                  <div><label for="advCfColo">地区码过滤</label><input id="advCfColo" value="{{ADV_CF_COLO}}" placeholder="例如 HKG,NRT,SJC" /></div>
+                  <div><label>&nbsp;</label><div class="switch"><span>失败时保留旧 DNS</span><input id="advKeepLast" type="checkbox" {{ADV_KEEP_LAST_CHECKED}} /></div></div>
+                </div>
+                <div class="hint">0 表示不限制。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
+              </div>
+            </details>
             <div class="toolbar">
               <button onclick="saveConfig()">保存</button>
               <button class="secondary" onclick="reloadConfig()">读取</button>
@@ -203,6 +232,20 @@ function collectConfig() {
     records_text: document.getElementById('records').value,
     ttl: Number(document.getElementById('ttl').value || 60),
     proxied: document.getElementById('proxied').checked,
+    advanced: {
+      timeout: document.getElementById('advTimeout').value.trim(),
+      rounds: document.getElementById('advRounds').value,
+      download_top: document.getElementById('advDownloadTop').value,
+      download_timeout: document.getElementById('advDownloadTimeout').value.trim(),
+      download_mode: document.getElementById('advDownloadMode').value,
+      download_url: document.getElementById('advDownloadUrl').value.trim(),
+      min_download_mbps: document.getElementById('advMinDownload').value,
+      max_latency_ms: document.getElementById('advMaxLatency').value,
+      min_latency_ms: document.getElementById('advMinLatency').value,
+      max_loss_rate: document.getElementById('advMaxLoss').value,
+      cf_colo: document.getElementById('advCfColo').value.trim(),
+      keep_last_on_fail: document.getElementById('advKeepLast').checked ? 'true' : 'false',
+    },
   };
 }
 
@@ -211,6 +254,19 @@ function applyForm(form) {
   document.getElementById('records').value = form.records_text || '';
   document.getElementById('ttl').value = form.ttl || 60;
   document.getElementById('proxied').checked = !!form.proxied;
+  const adv = form.advanced || {};
+  document.getElementById('advTimeout').value = adv.timeout || '6s';
+  document.getElementById('advRounds').value = adv.rounds || '6';
+  document.getElementById('advDownloadTop').value = adv.download_top || '8';
+  document.getElementById('advDownloadTimeout').value = adv.download_timeout || '90s';
+  document.getElementById('advDownloadMode').value = adv.download_mode || 'sequential';
+  document.getElementById('advDownloadUrl').value = adv.download_url || '';
+  document.getElementById('advMinDownload').value = adv.min_download_mbps || '0';
+  document.getElementById('advMaxLatency').value = adv.max_latency_ms || '0';
+  document.getElementById('advMinLatency').value = adv.min_latency_ms || '0';
+  document.getElementById('advMaxLoss').value = adv.max_loss_rate || '1';
+  document.getElementById('advCfColo').value = adv.cf_colo || '';
+  document.getElementById('advKeepLast').checked = !['0', 'false', 'no', 'off'].includes(String(adv.keep_last_on_fail || 'true').toLowerCase());
 }
 
 function applySchedule(schedule) {
@@ -266,7 +322,9 @@ function formatDateTime(v) {
 }
 
 function renderRunStateMeta(updatedAt, nextRunAt) {
-  document.getElementById('runStateMeta').innerHTML = `优选 IP 时间：${formatDateTime(updatedAt)}<br>下次运行时间：${formatDateTime(nextRunAt)}`;
+  const el = document.getElementById('runStateMeta');
+  if (!el) return;
+  el.innerHTML = `优选 IP 时间：${formatDateTime(updatedAt)}<br>下次运行时间：${formatDateTime(nextRunAt)}`;
 }
 
 function renderBestIps(items) {

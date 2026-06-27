@@ -4,6 +4,13 @@
 .wget-hsts
 .cache/
 .config/
+
+# runtime/build artifacts
 __pycache__/
 web/__pycache__/
 *.pyc
+*.log
+*.tmp
+.DS_Store
+data/
+go/
