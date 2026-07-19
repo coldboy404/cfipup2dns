@@ -1,21 +1,18 @@
 services:
   cfipup2dns:
+    image: ghcr.io/coldboy404/cfipup2dns:latest
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-debian:bookworm-slim}
-        APT_MIRROR: ${APT_MIRROR:-}
     container_name: cfipup2dns
     restart: unless-stopped
-    network_mode: "host"
+    ports:
+      - "${PORT:-9527}:9527"
     environment:
-      TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}
       PORT: 9527
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
-      GH_PROXY: ${GH_PROXY:-https://gh-proxy.org/}
-      MCIS_REF: ${MCIS_REF:-main}
       TIMEOUT: ${TIMEOUT:-6s}
       ROUNDS: ${ROUNDS:-6}
       MCIS_HOST: ${MCIS_HOST:-}
@@ -43,3 +40,5 @@ services:
       LOG_MEMORY_MAX_BYTES: ${LOG_MEMORY_MAX_BYTES:-16000}
     volumes:
       - ./data:/data
+    security_opt:
+      - no-new-privileges:true

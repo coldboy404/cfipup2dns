@@ -224,7 +224,15 @@ def get_selected_ips():
 
 
 def load_html():
-    return Path("/opt/cfipup2dns/web/templates/index.html").read_text(encoding="utf-8")
+    template = Path(__file__).resolve().parent / "templates" / "index.html"
+    return template.read_text(encoding="utf-8")
+
+
+def send_security_headers(handler):
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Referrer-Policy", "no-referrer")
+    handler.send_header("Cache-Control", "no-store")
 
 
 def json_response(handler, obj, status=200):
@@ -232,6 +240,7 @@ def json_response(handler, obj, status=200):
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
+    send_security_headers(handler)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -241,6 +250,7 @@ def text_response(handler, text, status=200, content_type="text/html; charset=ut
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(body)))
+    send_security_headers(handler)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -347,6 +357,9 @@ def form_state(cfg):
 
 
 def save_config_from_form(body):
+    current_cfg = load_config()
+    current_token = str(current_cfg.get("cloudflare", {}).get("token", "") or "").strip()
+    submitted_token = str(body.get("token", "") or "").strip()
     ttl_raw = str(body.get("ttl", "60") or "60").strip()
     try:
         ttl = int(ttl_raw)
@@ -362,7 +375,7 @@ def save_config_from_form(body):
     advanced["keep_last_on_fail"] = "true" if str(advanced.get("keep_last_on_fail", "true")).lower() not in ("0", "false", "no", "off") else "false"
     cfg = {
         "cloudflare": {
-            "token": str(body.get("token", "") or "").strip(),
+            "token": submitted_token or current_token,
             "ttl": ttl,
             "proxied": bool(body.get("proxied", False)),
             "records": records,
@@ -514,7 +527,7 @@ def render_index():
     cron_form = cron_state(cron_text)
     tpl = load_html()
     mapping = {
-        "CF_TOKEN": html.escape(state["token"]),
+        "CF_TOKEN": "",
         "CF_RECORDS": html.escape(state["records_text"]),
         "CF_TTL": html.escape(state["ttl"]),
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
@@ -696,6 +709,8 @@ def run_job(env):
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/health":
+            return json_response(self, {"ok": True, "service": "cfipup2dns"})
         if path == "/":
             return text_response(self, render_index())
         if path == "/api/logs":
@@ -726,7 +741,10 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, payload)
         if path == "/api/config":
             cfg = load_config()
-            return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
+            form = form_state(cfg)
+            form["token"] = ""
+            form["token_configured"] = bool(str(cfg.get("cloudflare", {}).get("token", "") or "").strip())
+            return json_response(self, {"ok": True, "form": form})
         if path == "/api/schedule":
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
             return json_response(self, {"ok": True, "schedule": cron_state(raw)})
@@ -752,7 +770,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             cfg = save_config_from_form(body or {})
-            return json_response(self, {"ok": True, "config": cfg, "form": form_state(cfg)})
+            form = form_state(cfg)
+            form["token"] = ""
+            form["token_configured"] = bool(str(cfg.get("cloudflare", {}).get("token", "") or "").strip())
+            return json_response(self, {"ok": True, "form": form})
 
         if path == "/api/schedule":
             content = build_cron_text(

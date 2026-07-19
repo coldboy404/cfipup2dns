@@ -5,16 +5,15 @@ cd "$(dirname "$0")/.."
 
 export DOCKER_CLIENT_TIMEOUT="${DOCKER_CLIENT_TIMEOUT:-600}"
 export COMPOSE_HTTP_TIMEOUT="${COMPOSE_HTTP_TIMEOUT:-600}"
-export BUILDKIT_PROGRESS="plain"
 
-if [[ -n "${GH_PROXY:-}" ]]; then
-  echo "[selected] GH_PROXY=${GH_PROXY}"
+if [[ "${BUILD_LOCAL:-0}" == "1" ]]; then
+  echo "[selected] 本地构建镜像"
+  docker compose build --pull
 else
-  echo "[selected] GH_PROXY=<direct>"
+  echo "[selected] 拉取 GHCR 最新镜像"
+  docker compose pull
 fi
 
-docker compose build --no-cache
+docker compose up -d --remove-orphans
 
-docker compose up -d
-
-echo "Done. WebUI: http://<server-ip>:9527"
+echo "Done. WebUI: http://<server-ip>:${PORT:-9527}"

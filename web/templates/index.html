@@ -272,7 +272,9 @@ function collectConfig() {
 }
 
 function applyForm(form) {
-  document.getElementById('token').value = form.token || '';
+  const token = document.getElementById('token');
+  token.value = form.token || '';
+  token.placeholder = form.token_configured ? '已配置；留空表示保持不变' : '请输入 Cloudflare API Token';
   document.getElementById('records').value = form.records_text || '';
   document.getElementById('ttl').value = form.ttl || 60;
   document.getElementById('proxied').checked = !!form.proxied;
@@ -301,7 +303,7 @@ function applySchedule(schedule) {
 
 async function saveConfig() {
   const payload = collectConfig();
-  if (!payload.token || !payload.records_text.trim()) return alert('API Token 和多域名配置不能为空');
+  if (!payload.records_text.trim()) return alert('多域名配置不能为空');
   const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const j = await r.json();
   if (!j.ok) return alert('保存失败');
