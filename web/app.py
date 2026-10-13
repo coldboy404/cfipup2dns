@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
+import base64
+import csv
+import hmac
 import html
+import io
+import ipaddress
 import json
+import math
+import re
+import signal
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -30,7 +39,14 @@ BEST_IP_FILES = {
     "6": PROJECT_DIR / "best_ips_v6.json",
 }
 
+# The reservation, process creation and cancellation share one lock.
+RUN_LOCK = threading.RLock()
+RUN_PROCESS = None
+RUN_THREAD = None
+MAX_REQUEST_BYTES = 64 * 1024
+
 LAST_RUN = {
+    "cancelled": False,
     "running": False,
     "code": None,
     "stdout": "",
@@ -155,7 +171,11 @@ def _load_best_ips_from_file():
             obj = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if not isinstance(obj, dict) or not isinstance(obj.get("result", []), list):
+            continue
         for row in obj.get("result", []) or []:
+            if not isinstance(row, dict):
+                continue
             ip = row.get("ip")
             if not ip:
                 continue
@@ -356,22 +376,52 @@ def form_state(cfg):
     }
 
 
+def validated_number(value, name, low, high, integer=False):
+    try:
+        if isinstance(value, bool):
+            raise ValueError()
+        number = float(value)
+        if not math.isfinite(number) or not low <= number <= high:
+            raise ValueError()
+        if integer and (not number.is_integer() or not re.fullmatch(r"[0-9]+", str(value))):
+            raise ValueError()
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} 必须在 {low}~{high} 范围内" ) from None
+    return int(number) if integer else number
+
+
+def validate_advanced(advanced):
+    for key, low, high in (("rounds", 1, 1000), ("download_top", 0, 10000)):
+        validated_number(advanced[key], key, low, high, integer=True)
+    for key in ("min_download_mbps", "max_latency_ms", "min_latency_ms", "max_loss_rate"):
+        validated_number(advanced[key], key, 0, 1 if key == "max_loss_rate" else 1000000)
+    if float(advanced["max_latency_ms"]) and float(advanced["min_latency_ms"]) > float(advanced["max_latency_ms"]):
+        raise ValueError("最小延迟不能大于最大延迟")
+    for key in ("timeout", "download_timeout"):
+        value = advanced[key]
+        if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))+", value):
+            raise ValueError(f"{key} 必须为正数时长，例如 6s 或 500ms")
+        units = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": .001, "s": 1, "m": 60, "h": 3600}
+        seconds = sum(float(n) * units[u] for n, u in re.findall(r"([0-9]+(?:\.[0-9]+)?)(ns|us|µs|ms|s|m|h)", value))
+        if not 0 < seconds <= 86400:
+            raise ValueError(f"{key} 必须大于 0 且不超过 24h")
+    if advanced["download_mode"] not in ("sequential", "all"):
+        raise ValueError("无效下载模式")
+
+
 def save_config_from_form(body):
     current_cfg = load_config()
     current_token = str(current_cfg.get("cloudflare", {}).get("token", "") or "").strip()
     submitted_token = str(body.get("token", "") or "").strip()
-    ttl_raw = str(body.get("ttl", "60") or "60").strip()
-    try:
-        ttl = int(ttl_raw)
-    except Exception:
-        ttl = 60
-    ttl = max(1, min(ttl, 86400))
+    ttl_raw = str(body.get("ttl", "60")).strip()
+    ttl = validated_number(ttl_raw, "TTL", 1, 86400, integer=True)
     records = parse_records_text(body.get("records_text", ""))
     advanced = dict(ADVANCED_DEFAULTS)
     body_advanced = body.get("advanced", {}) if isinstance(body.get("advanced", {}), dict) else {}
     for key in advanced:
         if key in body_advanced:
-            advanced[key] = str(body_advanced.get(key, "") or "").strip()
+            advanced[key] = str(body_advanced.get(key, "")).strip()
+    validate_advanced(advanced)
     advanced["keep_last_on_fail"] = "true" if str(advanced.get("keep_last_on_fail", "true")).lower() not in ("0", "false", "no", "off") else "false"
     cfg = {
         "cloudflare": {
@@ -389,7 +439,16 @@ def save_config_from_form(body):
         cfg["cloudflare"]["domain"] = ""
         cfg["cloudflare"]["zone_id"] = ""
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, name = tempfile.mkstemp(prefix=".config-", dir=CONFIG_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(cfg, out, ensure_ascii=False, indent=2)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(name, CONFIG_FILE)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
     DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None, "error": None})
     return cfg
 
@@ -643,42 +702,60 @@ def apply_advanced_env(env):
 
 
 def trigger_run(env=None):
-    if LAST_RUN["running"]:
-        return False
-    env = apply_advanced_env(env or os.environ.copy())
-    t = threading.Thread(target=run_job, args=(env or os.environ.copy(),), daemon=True)
-    t.start()
-    return True
+    global RUN_THREAD
+    with RUN_LOCK:
+        if LAST_RUN["running"]:
+            return False
+        env = apply_advanced_env(env if env is not None else os.environ.copy())
+        LAST_RUN.update({"running": True, "cancelled": False, "code": None,
+                         "stdout": "", "stderr": "", "started_at": time.time(),
+                         "ended_at": None, "selected_ips": []})
+        RUN_THREAD = threading.Thread(target=run_job, args=(env,), daemon=True)
+        try:
+            RUN_THREAD.start()
+        except Exception:
+            LAST_RUN["running"] = False
+            raise
+        return True
+
+
+def stop_run():
+    # Kill the entire session immediately: graceful SIGTERM can let the Python
+    # runner proceed to DNS writes after its mcis child exits. Do not use it.
+    with RUN_LOCK:
+        if not LAST_RUN["running"]:
+            return False
+        LAST_RUN["cancelled"] = True
+        if RUN_PROCESS is not None:
+            try:
+                os.killpg(RUN_PROCESS.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        return True
 
 
 def run_job(env):
-    compact_log_file(LOG_FILE)
-    compact_log_file(INIT_LOG_FILE)
-    compact_log_file(BOOT_LOG_FILE)
-
-    LAST_RUN.update({
-        "running": True,
-        "code": None,
-        "stdout": "",
-        "stderr": "",
-        "started_at": time.time(),
-        "ended_at": None,
-        "selected_ips": [],
-    })
+    global RUN_PROCESS
+    proc = None
+    code = None
+    error = ""
     memory_limit = _positive_int(LOG_MEMORY_MAX_BYTES, 16000)
     chunks = deque()
     chunks_size = 0
-    append_log(f"\n===== {datetime.now().isoformat()} 开始执行 =====\n")
-    proc = subprocess.Popen(
-        RUN_CMD,
-        shell=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-        bufsize=1,
-    )
     try:
+        compact_log_file(LOG_FILE)
+        compact_log_file(INIT_LOG_FILE)
+        compact_log_file(BOOT_LOG_FILE)
+        append_log(f"\n===== {datetime.now().isoformat()} 开始执行 =====\n")
+        with RUN_LOCK:
+            if LAST_RUN["cancelled"]:
+                return
+            proc = subprocess.Popen(
+                [RUN_CMD], text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, env=env, bufsize=1,
+                start_new_session=True,
+            )
+            RUN_PROCESS = proc
         if proc.stdout is not None:
             for line in iter(proc.stdout.readline, ""):
                 if not line:
@@ -691,26 +768,122 @@ def run_job(env):
                 LAST_RUN["stdout"] = "".join(chunks)
                 append_log(line)
         code = proc.wait()
+    except Exception as exc:
+        error = str(exc)
+        code = -1
     finally:
-        if proc.stdout is not None:
-            proc.stdout.close()
-    DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None})
-    LAST_RUN.update({
-        "running": False,
-        "code": code,
-        "stdout": "".join(chunks),
-        "stderr": "",
-        "ended_at": time.time(),
-        "selected_ips": get_selected_ips()["items"],
-    })
-    append_log(f"===== {datetime.now().isoformat()} 执行结束，退出码={code} =====\n")
+        if proc is not None:
+            # Also reap descendants if an unexpected logging/read error occurs.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            if proc.stdout is not None:
+                proc.stdout.close()
+        with RUN_LOCK:
+            RUN_PROCESS = None
+            DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None})
+            LAST_RUN.update({"running": False, "code": -signal.SIGKILL if LAST_RUN["cancelled"] else code,
+                             "stdout": "".join(chunks), "stderr": error,
+                             "ended_at": time.time()})
+        try:
+            append_log(f"===== {datetime.now().isoformat()} 执行结束，退出码={LAST_RUN['code']} =====\n")
+        except OSError:
+            pass
+
+
+def export_results(fmt, version):
+    if fmt not in ("csv", "txt") or version not in ("4", "6", "both"):
+        raise ValueError("无效导出格式或 IP 模式")
+    rows = []
+    seen = set()
+    for item in get_selected_ips()["items"]:
+        try:
+            ip = ipaddress.ip_address(item.get("ip", ""))
+        except ValueError:
+            continue
+        if (version != "both" and str(ip.version) != version) or str(ip) in seen:
+            continue
+        seen.add(str(ip))
+        row = {"version": str(ip.version), "ip": str(ip)}
+        # Only allow numeric metrics: no arbitrary strings/spreadsheet formulas.
+        for key in ("latency_ms", "download_mbps"):
+            try:
+                number = float(item.get(key))
+                row[key] = str(number) if math.isfinite(number) and number >= 0 else ""
+            except (TypeError, ValueError):
+                row[key] = ""
+        rows.append(row)
+    if fmt == "txt":
+        return "".join(row["ip"] + "\n" for row in rows)
+    out = io.StringIO(newline="")
+    writer = csv.DictWriter(out, fieldnames=("version", "ip", "latency_ms", "download_mbps"))
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
 
 
 class Handler(BaseHTTPRequestHandler):
+    def authenticated(self):
+        username = os.getenv("WEB_USERNAME", "")
+        password = os.getenv("WEB_PASSWORD", "")
+        if not username and not password:
+            return True
+        supplied = ""
+        try:
+            scheme, encoded = self.headers.get("Authorization", "").split(" ", 1)
+            if scheme.lower() == "basic":
+                supplied = base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (ValueError, UnicodeError):
+            pass
+        # Partial configuration fails closed, never silently disables auth.
+        if username and password and hmac.compare_digest(supplied.encode(), f"{username}:{password}".encode()):
+            return True
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="cfipup2dns", charset="UTF-8"')
+        self.send_header("Content-Length", "0")
+        send_security_headers(self)
+        self.end_headers()
+        self.close_connection = True
+        return False
+
+    def mutation_allowed(self):
+        if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urlparse(origin)
+            except ValueError:
+                return False
+            if (parsed.scheme not in ("http", "https") or parsed.netloc.lower() != self.headers.get("Host", "").lower()
+                    or parsed.path or parsed.query or parsed.fragment or parsed.username):
+                return False
+        return True
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/api/health":
             return json_response(self, {"ok": True, "service": "cfipup2dns"})
+        if not self.authenticated():
+            return
+        if path == "/api/export":
+            query = urllib.parse.parse_qs(urlparse(self.path).query)
+            fmt = query.get("format", ["csv"])[0]
+            version = query.get("ip_mode", ["both"])[0]
+            try:
+                body = export_results(fmt, version).encode("utf-8")
+            except ValueError as exc:
+                return json_response(self, {"ok": False, "error": str(exc)}, 400)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8" if fmt == "csv" else "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="best-ips-{version}.{fmt}"')
+            self.send_header("Content-Length", str(len(body)))
+            send_security_headers(self)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/":
             return text_response(self, render_index())
         if path == "/api/logs":
@@ -734,7 +907,9 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
         if path == "/api/status":
             selected = get_selected_ips()
-            payload = {"ok": True, **LAST_RUN, "next_run_at": next_run_time()}
+            with RUN_LOCK:
+                payload = {"ok": True, **LAST_RUN}
+            payload["next_run_at"] = next_run_time()
             payload["selected_ips"] = selected["items"]
             payload["selected_ips_updated_at"] = selected["updated_at"]
             payload["dns_error"] = selected.get("error")
@@ -761,15 +936,49 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        if not self.authenticated():
+            return
+        if not self.mutation_allowed():
+            self.close_connection = True
+            return json_response(self, {"ok": False, "error": "跨站请求被拒绝"}, 403)
+        try:
+            if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) > 1:
+                raise ValueError()
+            length_text = self.headers.get("Content-Length", "0")
+            if not re.fullmatch(r"[0-9]+", length_text):
+                raise ValueError()
+            length = int(length_text)
+        except ValueError:
+            self.close_connection = True
+            return json_response(self, {"ok": False, "error": "无效请求长度"}, 400)
+        if length > MAX_REQUEST_BYTES:
+            self.close_connection = True
+            return json_response(self, {"ok": False, "error": "请求过大"}, 413)
+        if length and self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            self.close_connection = True
+            return json_response(self, {"ok": False, "error": "请使用 application/json"}, 415)
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            body = json.loads(raw.decode("utf-8") or "{}")
-        except Exception:
-            body = {}
+            body = json.loads(raw.decode("utf-8"))
+            if not isinstance(body, dict):
+                raise ValueError()
+            if path == "/api/config":
+                if "advanced" in body and not isinstance(body["advanced"], dict):
+                    raise ValueError("advanced 必须是对象")
+            if path in ("/api/run", "/api/schedule"):
+                if body.get("ip_mode", "both") not in ("4", "6", "both"):
+                    raise ValueError("无效 IP 模式")
+                validated_number(body.get("top_n", 5 if path == "/api/run" else 3), "优选数量", 1, 50, integer=True)
+                if path == "/api/schedule":
+                    validated_number(body.get("interval_hours", 6), "计划间隔", 1, 24, integer=True)
+        except (ValueError, UnicodeError) as exc:
+            return json_response(self, {"ok": False, "error": str(exc) or "无效 JSON 对象"}, 400)
 
         if path == "/api/config":
-            cfg = save_config_from_form(body or {})
+            try:
+                cfg = save_config_from_form(body)
+            except ValueError as exc:
+                return json_response(self, {"ok": False, "error": str(exc)}, 400)
             form = form_state(cfg)
             form["token"] = ""
             form["token_configured"] = bool(str(cfg.get("cloudflare", {}).get("token", "") or "").strip())
@@ -786,12 +995,17 @@ class Handler(BaseHTTPRequestHandler):
             save_cron_text(content)
             return json_response(self, {"ok": True, "schedule": cron_state(content)})
 
+        if path == "/api/stop":
+            stopped = stop_run()
+            return json_response(self, {"ok": stopped, "running": LAST_RUN["running"],
+                                        "cancelled": LAST_RUN["cancelled"]}, 200 if stopped else 409)
+
         if path == "/api/run":
             env = os.environ.copy()
             env["IP_MODE"] = str(body.get("ip_mode", "both"))
             env["TOP_N"] = str(body.get("top_n", 5))
             ok = trigger_run(env)
-            return json_response(self, {"ok": ok, "running": LAST_RUN["running"]})
+            return json_response(self, {"ok": ok, "running": LAST_RUN["running"]}, 200 if ok else 409)
 
         if path == "/api/logs/clear":
             if LOG_FILE.exists():

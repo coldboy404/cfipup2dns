@@ -27,7 +27,7 @@ jobs:
 
       - name: Validate Python and shell files
         run: |
-          python3 -m py_compile cfip_runner.py web/app.py
+          python3 -m py_compile cfip_runner.py web/app.py docker/sync_cidr.py
           python3 -m unittest discover -s tests -v
           for file in cfip.sh docker/*.sh install.sh uninstall.sh menu.sh; do
             sh -n "$file"
@@ -36,8 +36,36 @@ jobs:
       - name: Validate Compose file
         run: docker compose config --quiet
 
-  build-and-push:
+  smoke-test:
     needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build native image for runtime verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cfipup2dns:smoke
+          cache-from: type=gha,scope=smoke
+          cache-to: type=gha,mode=max,scope=smoke
+      - name: Verify initialization, health, and HTTP authentication
+        run: |
+          docker run -d --name smoke -p 127.0.0.1:9527:9527 -e WEB_USERNAME=ci -e WEB_PASSWORD=ci-smoke-only cfipup2dns:smoke
+          trap 'docker logs smoke; docker rm -f smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9527/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:9527/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9527/api/config)" = 401
+          curl -fsS -u ci:ci-smoke-only http://127.0.0.1:9527/api/config > /dev/null
+          docker exec smoke test -x /data/project/montecarlo-ip-searcher
+          test "$(docker exec smoke stat -c %a /data/project/config.json)" = 600
+
+  build-and-push:
+    needs: [validate, smoke-test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

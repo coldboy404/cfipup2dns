@@ -62,6 +62,8 @@
     button.secondary:hover { background: var(--card-soft); }
     button.warn { background: var(--warn); color: #fff; }
     button.warn:hover { background: var(--warn-hover); }
+    button.danger { background: var(--danger); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
     .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; background: var(--card-soft); border-radius: 10px; border: 1px solid var(--line); }
     .switch input { width: 18px; height: 18px; accent-color: var(--primary); }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -186,10 +188,19 @@
             </div>
             <div>
               <label>&nbsp;</label>
-              <button class="warn" onclick="runNow()">立即运行</button>
+              <button id="runButton" class="warn" onclick="runNow()">立即运行</button>
             </div>
           </div>
+          <div class="toolbar" style="margin:12px 0">
+            <button id="stopButton" class="danger" onclick="stopNow()" disabled>停止当前任务</button>
+          </div>
+          <div class="hint">停止会终止本次测速及其子进程，不撤销已经完成的 DNS 更新；定时计划仍保留。</div>
           <div class="status" id="runState">空闲</div>
+          <div class="toolbar" style="margin-top:12px">
+            <select id="exportMode" aria-label="导出 IP 模式"><option value="both">导出 IPv4 / IPv6</option><option value="4">仅 IPv4</option><option value="6">仅 IPv6</option></select>
+            <button class="secondary" onclick="downloadResults('csv')">导出 CSV</button>
+            <button class="secondary" onclick="downloadResults('txt')">导出 TXT</button>
+          </div>
           <div style="height:12px"></div>
           <div class="ip-list" id="bestIps"><div class="status">暂无优选 IP</div></div>
         </div>
@@ -247,6 +258,23 @@
 
 <script>
 let isLogsFocused = false;
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+}
+
+function downloadResults(format) {
+  const mode = document.getElementById('exportMode').value;
+  window.location.href = `/api/export?format=${format}&ip_mode=${mode}`;
+}
+
+async function stopNow() {
+  if (!confirm('停止当前任务？已完成的 DNS 更新不会撤销。')) return;
+  const r = await fetch('/api/stop', {method: 'POST'});
+  const j = await r.json();
+  if (!j.ok) alert(j.error || '没有正在运行的任务');
+  await loadStatus();
+}
 
 function collectConfig() {
   return {
@@ -306,7 +334,7 @@ async function saveConfig() {
   if (!payload.records_text.trim()) return alert('多域名配置不能为空');
   const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const j = await r.json();
-  if (!j.ok) return alert('保存失败');
+  if (!j.ok) return alert(j.error || '保存失败');
   applyForm(j.form || payload);
   alert('已保存');
 }
@@ -361,11 +389,11 @@ function renderBestIps(items) {
     const latencyVal = Number(item.latency_ms);
     const hasLatency = Number.isFinite(latencyVal) && latencyVal > 0;
     const tags = [
-      `<span class="tag">IPv${item.version}</span>`,
+      `<span class="tag">IPv${escapeHtml(item.version)}</span>`,
       speed > 0 ? `<span class="tag">下载 ${formatNumber(speed)} Mbps</span>` : `<span class="tag">下载未测出</span>`,
       hasLatency ? `<span class="tag">延迟 ${formatNumber(latencyVal)} ms</span>` : `<span class="tag">延迟未测出</span>`,
     ].filter(Boolean).join('');
-    return `<div class="ip-item"><div class="ip-main"><code>${item.ip}</code></div><div class="ip-tags">${tags}</div></div>`;
+    return `<div class="ip-item"><div class="ip-main"><code>${escapeHtml(item.ip)}</code></div><div class="ip-tags">${tags}</div></div>`;
   }).join('');
   return true;
 }
@@ -388,7 +416,8 @@ async function runNow() {
     body: JSON.stringify({ip_mode, top_n})
   });
   const j = await r.json();
-  document.getElementById('runState').innerHTML = `${j.running ? '运行中' : '已有任务在运行'}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
+  if (!j.ok) alert(j.error || '已有任务在运行');
+  await loadStatus();
   setTimeout(() => { loadStatus(); loadBestIps(); }, 1000);
 }
 
@@ -406,7 +435,7 @@ async function saveSimpleSchedule() {
     body: JSON.stringify(payload)
   });
   const j = await r.json();
-  if (!j.ok) return alert('保存失败');
+  if (!j.ok) return alert(j.error || '保存失败');
   applySchedule(j.schedule || {});
   alert('已保存');
 }
@@ -433,7 +462,9 @@ async function clearLogs() {
 async function loadStatus() {
   const r = await fetch('/api/status');
   const j = await r.json();
-  const state = j.running ? '运行中' : ('空闲' + (j.code === null ? '' : ` / 退出码 ${j.code}`));
+  document.getElementById('runButton').disabled = !!j.running;
+  document.getElementById('stopButton').disabled = !j.running || !!j.cancelled;
+  const state = j.running ? (j.cancelled ? '正在停止' : '运行中') : ((j.cancelled ? '已停止' : '空闲') + (j.code === null ? '' : ` / 退出码 ${j.code}`));
   document.getElementById('runState').innerHTML = `${state}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
   renderRunStateMeta(j.selected_ips_updated_at, j.next_run_at);
   if (j.selected_ips && j.selected_ips.length) {

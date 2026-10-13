@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+import fcntl
+import ipaddress
 import json
+import math
+import tempfile
 import os
 import shutil
 import socket
@@ -14,7 +18,7 @@ from pathlib import Path
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", "/data/project"))
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
 GH_PROXY = os.getenv("GH_PROXY", "https://gh-proxy.org/")
-MCIS_REF = os.getenv("MCIS_REF", "main")
+MCIS_REF = os.getenv("MCIS_REF", "")
 IP_MODE = os.getenv("IP_MODE", "both")
 TOP_N = int(os.getenv("TOP_N", "5"))
 TOP_TEST = int(os.getenv("TOP_TEST", "50"))
@@ -118,15 +122,14 @@ def ensure_mcis():
     if not mcis_bin.exists():
         raise RuntimeError("mcis 未初始化，请先重建/重启容器完成预编译")
     current_version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
-    if current_version != f"{MCIS_REF}+source":
+    if MCIS_REF and current_version != f"{MCIS_REF}+source":
         log(f"[!] 当前 mcis 版本标记为: {current_version or 'unknown'}，目标: {MCIS_REF}+source")
     if not mcis_supports_flag(mcis_bin, "-download-mode"):
         raise RuntimeError("当前 mcis 不支持 -download-mode，请先在容器初始化阶段完成正确编译")
     for name in ("ipv4cidr.txt", "ipv6cidr.txt"):
         p = PROJECT_DIR / name
         if not p.exists() or p.stat().st_size == 0:
-            raw = f"https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/{name}"
-            fetch_with_fallback(raw, p, timeout=60)
+            raise RuntimeError(f"缺少内置 CIDR 文件: {p}，请重启容器完成初始化")
     return mcis_bin
 
 
@@ -269,7 +272,8 @@ def _float_or_none(value):
     try:
         if value in (None, ""):
             return None
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else None
     except Exception:
         return None
 
@@ -357,7 +361,13 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied):
     seen = set()
     for row in best:
         ip = str(row.get("ip", "") or "").strip()
-        if ip and ip not in seen:
+        if not ip:
+            continue
+        address = ipaddress.ip_address(ip)
+        if address.version != (4 if dns_type == "A" else 6):
+            raise ValueError(f"IP 类型与 {dns_type} 不匹配: {ip}")
+        ip = str(address)
+        if ip not in seen:
             desired_ips.append(ip)
             seen.add(ip)
     if not desired_ips:
@@ -373,18 +383,30 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied):
         existing.sort(key=lambda r: str(r.get("created_on") or r.get("id") or ""))
 
         log(f"[*] 正在差异同步 {domain} 的 {dns_type} 记录：现有 {len(existing)} 条，目标 {len(desired_ips)} 条")
-        for idx, ip in enumerate(desired_ips):
+        # Preserve matching record IDs even if speed ranking changes. Only reuse
+        # records that are no longer wanted; delete extras after successful writes.
+        remaining = list(existing)
+        matched = {}
+        for ip in desired_ips:
+            rec = next((r for r in remaining if r.get("content") == ip), None)
+            if rec is not None:
+                matched[ip] = rec
+                remaining.remove(rec)
+        for ip in desired_ips:
             payload = {"type": dns_type, "name": domain, "content": ip, "ttl": ttl, "proxied": proxied}
-            if idx < len(existing):
-                rec = existing[idx]
-                rid = rec.get("id")
-                if rec.get("content") == ip and int(rec.get("ttl") or ttl) == int(ttl) and bool(rec.get("proxied", False)) == bool(proxied):
+            rec = matched.get(ip)
+            if rec is None and remaining:
+                rec = remaining.pop(0)
+            if rec is not None:
+                rid = rec["id"]
+                effective_ttl = 1 if proxied else ttl
+                if rec.get("content") == ip and int(rec.get("ttl") or ttl) == int(effective_ttl) and bool(rec.get("proxied", False)) == bool(proxied):
                     continue
-                cf_request("PUT", f"/zones/{zone_id}/dns_records/{rid}", token, payload)
+                cf_request("PATCH", f"/zones/{zone_id}/dns_records/{rid}", token, payload)
             else:
                 cf_request("POST", f"/zones/{zone_id}/dns_records", token, payload)
 
-        for rec in existing[len(desired_ips):]:
+        for rec in remaining:
             rid = rec.get("id")
             if rid:
                 cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
@@ -469,11 +491,35 @@ def run_mode(mode, cfg, mcis_bin):
 
     update_dns_records(token, records, dns_type, best, ttl, proxied)
 
-    (PROJECT_DIR / f"best_ips_v{mode}.json").write_text(json.dumps({"mode": sort_mode, "result": best}, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_json_write(PROJECT_DIR / f"best_ips_v{mode}.json", {"mode": sort_mode, "result": best})
     log(f"[✓] IPv{mode} 已同步到 {len(records)} 个域名，排序依据: {sort_mode}")
 
 
+def atomic_json_write(path, data):
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(data, out, ensure_ascii=False, indent=2, allow_nan=False)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def main():
+    PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    # A process-wide lock also covers direct CLI invocations, not just WebUI jobs.
+    with open(PROJECT_DIR / ".run.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("已有优选任务运行中")
+        run_all_modes()
+
+
+def run_all_modes():
     cfg = load_config()
     mcis_bin = ensure_mcis()
     modes = ["4", "6"] if IP_MODE == "both" else [IP_MODE]

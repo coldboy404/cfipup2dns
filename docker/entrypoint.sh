@@ -10,12 +10,17 @@ PORT="${PORT:-9527}"
 mkdir -p "$PROJECT_DIR" "$(dirname "$CRON_FILE")" "$LOG_DIR"
 
 if ! /opt/cfipup2dns/docker/init-mcis.sh >> /data/logs/init-mcis.log 2>&1; then
-  printf '%s\n' "[警告] mcis 初始化失败，Web 面板仍会启动；请查看 /data/logs/init-mcis.log" >> /data/logs/init-mcis.log
+  printf '%s\n' "[错误] mcis 初始化失败；请查看 /data/logs/init-mcis.log" >&2
+  exit 1
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
-  cp /opt/cfipup2dns/config.example.json "$CONFIG_FILE"
+  umask 077
+  export CONFIG_FILE
+  python3 -c 'import sys; sys.path.insert(0, "/opt/cfipup2dns/web"); import app; app.save_config_from_form({})'
 fi
+
+chmod 600 "$CONFIG_FILE"
 
 if [ ! -f "$CRON_FILE" ]; then
   cat > "$CRON_FILE" <<'CRON'

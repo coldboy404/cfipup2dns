@@ -4,7 +4,8 @@ ARG GO_VERSION=1.25.5
 FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:${GO_VERSION}-bookworm AS mcis-builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG MCIS_REF=main
+ARG MCIS_REF=add8ab94463ec440d17d354c858be7346a52b95e
+ARG MCIS_SHA256=353cdcc516f2fb576fc5a31d75e5e99789263873c5196e791580392ddb37d81c
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -12,12 +13,11 @@ RUN apt-get update \
 RUN set -eux; \
     target_os="${TARGETOS:-linux}"; \
     target_arch="${TARGETARCH:-amd64}"; \
-    case "$MCIS_REF" in \
-      main) archive_url="https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/heads/main.tar.gz" ;; \
-      *) archive_url="https://github.com/Leo-Mu/montecarlo-ip-searcher/archive/refs/tags/${MCIS_REF}.tar.gz" ;; \
-    esac; \
+    archive_url="https://codeload.github.com/Leo-Mu/montecarlo-ip-searcher/tar.gz/${MCIS_REF}"; \
     curl -fL --retry 4 --retry-delay 2 "$archive_url" -o /tmp/mcis.tar.gz; \
+    printf '%s  /tmp/mcis.tar.gz\n' "$MCIS_SHA256" | sha256sum -c -; \
     tar -xzf /tmp/mcis.tar.gz --strip-components=1 -C /src; \
+    mkdir -p /out; \
     CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
       go build -trimpath -ldflags='-s -w' -o /out/montecarlo-ip-searcher ./cmd/mcis; \
     printf '%s+source' "$MCIS_REF" > /out/.mcis_version; \
@@ -39,7 +39,6 @@ ENV TZ=Asia/Shanghai \
     CONFIG_FILE=/data/project/config.json \
     CRON_FILE=/data/cron/cfip.cron \
     LOG_FILE=/data/logs/cron.log \
-    MCIS_REF=main \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

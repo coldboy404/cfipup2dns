@@ -29,6 +29,24 @@ class WebConfigTests(unittest.TestCase):
             self.assertEqual(saved["cloudflare"]["token"], "secret-token")
             self.assertEqual(saved["cloudflare"]["records"][0]["domain"], "new.example.com")
 
+    def test_validation_accepts_zero_disabled_limits(self):
+        advanced = dict(app.ADVANCED_DEFAULTS)
+        advanced.update(download_top="0", min_download_mbps="0", max_loss_rate="0", timeout="500ms")
+        app.validate_advanced(advanced)
+
+    def test_validation_rejects_nonfinite_and_boolean_numbers(self):
+        for value in (True, False, "NaN", "Infinity", -1, "1.5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                app.validated_number(value, "rounds", 1, 100, integer=True)
+
+    def test_export_uses_address_family_not_untrusted_version_label(self):
+        with mock.patch.object(app, "get_selected_ips", return_value={"items": [
+            {"version": "6", "ip": "1.1.1.1"},
+            {"version": "4", "ip": "2606:4700:4700::1111"},
+        ]}):
+            self.assertEqual(app.export_results("txt", "4"), "1.1.1.1\n")
+            self.assertEqual(app.export_results("txt", "6"), "2606:4700:4700::1111\n")
+
     def test_rendered_page_does_not_embed_token(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.json"

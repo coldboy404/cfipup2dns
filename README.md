@@ -12,6 +12,9 @@
 - 延迟、丢包率、下载速度、Cloudflare 地区码筛选
 - DNS 差异化同步，测速失败时默认保留旧解析
 - 运行日志、优选结果持久化和日志自动裁剪
+- 优选结果按 IPv4 / IPv6 筛选，支持 CSV / TXT 导出
+- 可停止正在运行的任务，手动、定时和 CLI 任务防重叠
+- 可选 WebUI 账号认证、跨站请求防护、参数校验
 - GHCR 多架构镜像：`linux/amd64`、`linux/arm64`
 - 镜像内已预编译 `montecarlo-ip-searcher`，容器启动时无需安装 Go、下载源码或现场编译
 
@@ -43,6 +46,9 @@ services:
       - "9527:9527"
     environment:
       TZ: Asia/Shanghai
+      # 如需认证，取消注释并设置强密码；公网访问还必须配置 HTTPS
+      # WEB_USERNAME: admin
+      # WEB_PASSWORD: "请替换为强密码"
     volumes:
       - ./data:/data
     security_opt:
@@ -178,6 +184,12 @@ Compose 文件只需保留基础配置。高级参数可在 WebUI 中设置，�
 
 升级容器不会删除这些数据。请自行保护 `data/project/config.json`，其中包含 Cloudflare Token。
 
+## IP 地址库升级
+
+内置 CIDR 文件记录 SHA256 与条目数到 `/data/project/.cidr-manifest.json`。受管理且未被修改的库随镜像升级自动刷新；手动修改的文件，以及首次升级时无法判断来源的旧文件，默认保留，初始化日志会说明状态。
+
+如需将某一类地址库恢复为当前镜像内置版本，请先自行留存自定义内容，删除对应的 `data/project/ipv4cidr.txt` 或 `ipv6cidr.txt` 后重启容器。不会在启动时下载第三方在线库，也不会默默覆盖自定义内容。
+
 ## 健康检查
 
 镜像内置健康检查接口：
@@ -192,6 +204,16 @@ curl http://127.0.0.1:9527/api/health
 {"ok": true, "service": "cfipup2dns"}
 ```
 
+## 结果导出与任务控制
+
+WebUI 结果区可选择全部 / IPv4 / IPv6 并下载 CSV 或 TXT，TXT 每行一个 IP；CSV 包含延迟与下载速度（Mbps，不是 MB/s）。
+
+“停止任务”会终止当前测速进程组，阻止任务继续执行；已经提交给 Cloudflare 的 DNS 修改不会自动回滚。测速失败、取消或空结果不会主动删除现有解析。
+
+DNS 差异同步按 IP 匹配原记录，不因测速排名变化而重复写入；仅替换失效候选，并在新记录写入成功后删除多余记录。该过程不是 Cloudflare 端事务，多域名中途失败时可能已有部分域名更新。
+
+本轮功能设计参考 [CFData-WEB](https://github.com/PoemMisty/CFData-WEB) 的结果导出和任务交互思路，未复制其 GPL 源码，也未替换本项目的 `mcis` 测速核心。非标 IP/端口扫描、数据中心分组二次测速等仍属于后续可扩展方向。
+
 ## 与上游项目的关系
 
 本项目基于 `Leo-Mu/montecarlo-ip-searcher`，主要增加：
@@ -202,11 +224,14 @@ curl http://127.0.0.1:9527/api/health
 - 定时任务、结果持久化和日志管理
 - 容器镜像与自动发布流程
 
-镜像构建阶段会从上游 `main` 分支编译 `mcis`，运行容器不再依赖 Go 工具链，也不需要在启动阶段访问 GitHub 下载源码。
+镜像构建阶段从固定上游提交 `add8ab94463ec440d17d354c858be7346a52b95e` 编译 `mcis`，并校验源码归档 SHA256。运行容器不依赖 Go 工具链或启动时下载源码；持久化二进制按镜像内版本标记自动升级。自定义上游版本时，必须同时传入构建参数 `MCIS_REF` 与对应 `MCIS_SHA256`。
 
 ## 安全提示
 
-- WebUI 能修改 DNS 和读取运行状态，默认没有账号认证，请不要直接暴露到公网。
+- WebUI 能修改 DNS 和读取运行状态。默认不启用认证以兼容现有内网部署，请不要直接暴露到公网。
+- 配置 `WEB_USERNAME` 与 `WEB_PASSWORD` 可开启 HTTP Basic Auth，两项必须同时设置；使用 HTTPS 反向代理避免凭据明文传输。仓库 Compose 支持从 `.env` 读取两项，请保护该文件权限。
+- 跨域的修改请求会被拒绝；反向代理应保留原始 Host。
+- 配置文件与新写入的结果文件使用 `0600` 权限；配置和结果采用原子替换，避免中途断电产生半截 JSON。
 - 推荐仅在内网访问，或放在带认证与 HTTPS 的反向代理后面。
 - Cloudflare Token 应遵循最小权限原则。
 - 若需要公网部署，可在反向代理层添加访问控制、Basic Auth 或单点登录。

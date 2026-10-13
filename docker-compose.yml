@@ -11,6 +11,8 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       PORT: 9527
+      WEB_USERNAME: ${WEB_USERNAME:-}
+      WEB_PASSWORD: ${WEB_PASSWORD:-}
       PROJECT_DIR: /data/project
       CONFIG_FILE: /data/project/config.json
       TIMEOUT: ${TIMEOUT:-6s}
@@ -40,5 +42,7 @@ services:
       LOG_MEMORY_MAX_BYTES: ${LOG_MEMORY_MAX_BYTES:-16000}
     volumes:
       - ./data:/data
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
