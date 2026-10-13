@@ -793,6 +793,28 @@ def run_job(env):
             pass
 
 
+def load_run_history():
+    try:
+        path = PROJECT_DIR / "run_history.json"
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data[-30:] if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def load_scan_only_results():
+    items = []
+    for version in ("4", "6"):
+        try:
+            data = json.loads((PROJECT_DIR / f"scan_only_v{version}.json").read_text(encoding="utf-8"))
+            items.extend(normalize_ip_row(version, row) for row in data["result"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return items
+
+
 def export_results(fmt, version):
     if fmt not in ("csv", "txt") or version not in ("4", "6", "both"):
         raise ValueError("无效导出格式或 IP 模式")
@@ -905,10 +927,16 @@ class Handler(BaseHTTPRequestHandler):
             boot_logs = read_recent_log(BOOT_LOG_FILE, 200, LOG_KEEP_BYTES)
             combined = "\n\n".join([p for p in [live_logs, init_logs, boot_logs, file_logs] if p]).strip()
             return json_response(self, {"ok": True, "logs": combined or "(暂无日志)"})
+        if path == "/api/history":
+            return json_response(self, {"ok": True, "history": load_run_history()})
+        if path == "/api/scan-results":
+            return json_response(self, {"ok": True, "result": load_scan_only_results()})
         if path == "/api/status":
             selected = get_selected_ips()
             with RUN_LOCK:
                 payload = {"ok": True, **LAST_RUN}
+            history = load_run_history()
+            payload["last_summary"] = history[-1] if history else None
             payload["next_run_at"] = next_run_time()
             payload["selected_ips"] = selected["items"]
             payload["selected_ips_updated_at"] = selected["updated_at"]
@@ -965,6 +993,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/config":
                 if "advanced" in body and not isinstance(body["advanced"], dict):
                     raise ValueError("advanced 必须是对象")
+            if path == "/api/run" and not isinstance(body.get("scan_only", False), bool):
+                raise ValueError("scan_only 必须为布尔值")
             if path in ("/api/run", "/api/schedule"):
                 if body.get("ip_mode", "both") not in ("4", "6", "both"):
                     raise ValueError("无效 IP 模式")
@@ -1004,6 +1034,7 @@ class Handler(BaseHTTPRequestHandler):
             env = os.environ.copy()
             env["IP_MODE"] = str(body.get("ip_mode", "both"))
             env["TOP_N"] = str(body.get("top_n", 5))
+            env["SCAN_ONLY"] = "true" if body.get("scan_only", False) else "false"
             ok = trigger_run(env)
             return json_response(self, {"ok": ok, "running": LAST_RUN["running"]}, 200 if ok else 409)
 

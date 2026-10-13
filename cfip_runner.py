@@ -47,6 +47,8 @@ MIN_LATENCY_MS = float(os.getenv("MIN_LATENCY_MS", "0") or 0)
 MAX_LOSS_RATE = float(os.getenv("MAX_LOSS_RATE", "1") or 1)
 MIN_DOWNLOAD_MBPS = float(os.getenv("MIN_DOWNLOAD_MBPS", "0") or 0)
 CF_COLO = os.getenv("CF_COLO", "").strip().upper()
+SCAN_ONLY = os.getenv("SCAN_ONLY", "false").strip().lower() in ("1", "true", "yes", "on")
+HISTORY_LIMIT = 30
 
 
 def log(msg):
@@ -231,7 +233,11 @@ def parse_json_lines(path):
     uniq = []
     seen = set()
     for row in rows:
-        ip = row.get("ip")
+        try:
+            ip = str(ipaddress.ip_address(row.get("ip")))
+        except (ValueError, TypeError):
+            continue
+        row["ip"] = ip
         if ip in seen:
             continue
         seen.add(ip)
@@ -239,16 +245,29 @@ def parse_json_lines(path):
         latency = row.get("latency_ms")
         if latency in (None, "", 0, "0"):
             latency = row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
-        try:
-            latency = float(latency)
-            row["latency_ms"] = latency if latency > 0 else None
-        except Exception:
-            row["latency_ms"] = None
+        latency = _float_or_none(latency)
+        row["latency_ms"] = latency if latency is not None and latency > 0 else None
+        # Normalize all numeric metrics before sorting or serializing results.
+        for key in ("download_mbps", "score_ms", "total_ms", "ttfb_ms", "connect_ms",
+                    "loss_rate", "loss", "lossRate", "packet_loss", "packet_loss_rate",
+                    "sent", "sended", "requests", "received", "recv", "success"):
+            if key in row:
+                value = _float_or_none(row[key])
+                row[key] = value if value is not None and value >= 0 else None
+        # Keep only the public result schema; arbitrary upstream fields may
+        # contain non-finite JSON numbers or unexpectedly large nested objects.
+        row = {key: row[key] for key in ("ip", "ok", "latency_ms", "download_mbps", "score_ms",
+               "loss_rate", "loss", "lossRate", "packet_loss", "packet_loss_rate",
+               "sent", "sended", "requests", "received", "recv", "success",
+               "colo", "cf_colo", "cfcolo", "location", "pop") if key in row}
 
         row_ok = row.get("ok")
         if isinstance(row_ok, str):
             row_ok = row_ok.strip().lower() in ("1", "true", "yes", "ok")
-        row["ok"] = bool(row_ok)
+        row["ok"] = row_ok is True or (type(row_ok) in (int, float) and row_ok == 1)
+        for key in ("colo", "cf_colo", "cfcolo", "location", "pop"):
+            if key in row:
+                row[key] = row[key][:64] if isinstance(row[key], str) else ""
 
         uniq.append(row)
 
@@ -270,7 +289,7 @@ def parse_json_lines(path):
 
 def _float_or_none(value):
     try:
-        if value in (None, ""):
+        if value in (None, "") or isinstance(value, bool):
             return None
         result = float(value)
         return result if math.isfinite(result) else None
@@ -282,11 +301,11 @@ def row_loss_rate(row):
     for key in ("loss_rate", "loss", "lossRate", "packet_loss", "packet_loss_rate"):
         val = _float_or_none(row.get(key))
         if val is not None:
-            return val / 100.0 if val > 1 else val
+            return (val / 100.0 if val > 1 else val) if 0 <= val <= 100 else None
     sent = _float_or_none(row.get("sent") or row.get("sended") or row.get("requests"))
-    recv = _float_or_none(row.get("received") or row.get("recv") or row.get("success"))
-    if sent and sent > 0 and recv is not None:
-        return max(0.0, min(1.0, (sent - recv) / sent))
+    recv = next((_float_or_none(row[k]) for k in ("received", "recv", "success") if row.get(k) is not None), None)
+    if sent and sent > 0 and recv is not None and 0 <= recv <= sent:
+        return (sent - recv) / sent
     return None
 
 
@@ -304,14 +323,14 @@ def apply_result_filters(rows):
     stats = {"total": len(rows), "latency": 0, "loss": 0, "speed": 0, "colo": 0}
     for row in rows:
         latency = _float_or_none(row.get("latency_ms"))
-        if MAX_LATENCY_MS > 0 and latency is not None and latency > MAX_LATENCY_MS:
+        if MAX_LATENCY_MS > 0 and (latency is None or latency <= 0 or latency > MAX_LATENCY_MS):
             stats["latency"] += 1
             continue
-        if MIN_LATENCY_MS > 0 and latency is not None and latency < MIN_LATENCY_MS:
+        if MIN_LATENCY_MS > 0 and (latency is None or latency < MIN_LATENCY_MS):
             stats["latency"] += 1
             continue
         loss = row_loss_rate(row)
-        if MAX_LOSS_RATE < 1 and loss is not None and loss > MAX_LOSS_RATE:
+        if MAX_LOSS_RATE < 1 and (loss is None or loss > MAX_LOSS_RATE):
             stats["loss"] += 1
             continue
         speed = _float_or_none(row.get("download_mbps")) or 0
@@ -374,43 +393,59 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied):
         log(f"[!] 没有可写入的 {dns_type} 记录，跳过 DNS 更新，保留现有解析")
         return
 
+    outcomes = []
     for item in records:
         domain = item["domain"]
-        zone_id = resolve_zone_id(token, domain, item.get("zone_id", ""))
-        q = urllib.parse.urlencode({"type": dns_type, "name": domain})
-        existing = cf_request_all(token, f"/zones/{zone_id}/dns_records?{q}")
-        existing = [r for r in existing if str(r.get("type", "")).upper() == dns_type and str(r.get("name", "")).lower() == domain.lower()]
-        existing.sort(key=lambda r: str(r.get("created_on") or r.get("id") or ""))
+        try:
+            zone_id = resolve_zone_id(token, domain, item.get("zone_id", ""))
+            q = urllib.parse.urlencode({"type": dns_type, "name": domain})
+            existing = cf_request_all(token, f"/zones/{zone_id}/dns_records?{q}")
+            existing = [r for r in existing if str(r.get("type", "")).upper() == dns_type and str(r.get("name", "")).lower() == domain.lower()]
+            existing.sort(key=lambda r: str(r.get("created_on") or r.get("id") or ""))
 
-        log(f"[*] 正在差异同步 {domain} 的 {dns_type} 记录：现有 {len(existing)} 条，目标 {len(desired_ips)} 条")
-        # Preserve matching record IDs even if speed ranking changes. Only reuse
-        # records that are no longer wanted; delete extras after successful writes.
-        remaining = list(existing)
-        matched = {}
-        for ip in desired_ips:
-            rec = next((r for r in remaining if r.get("content") == ip), None)
-            if rec is not None:
-                matched[ip] = rec
-                remaining.remove(rec)
-        for ip in desired_ips:
-            payload = {"type": dns_type, "name": domain, "content": ip, "ttl": ttl, "proxied": proxied}
-            rec = matched.get(ip)
-            if rec is None and remaining:
-                rec = remaining.pop(0)
-            if rec is not None:
-                rid = rec["id"]
-                effective_ttl = 1 if proxied else ttl
-                if rec.get("content") == ip and int(rec.get("ttl") or ttl) == int(effective_ttl) and bool(rec.get("proxied", False)) == bool(proxied):
-                    continue
-                cf_request("PATCH", f"/zones/{zone_id}/dns_records/{rid}", token, payload)
-            else:
-                cf_request("POST", f"/zones/{zone_id}/dns_records", token, payload)
+            log(f"[*] 正在差异同步 {domain} 的 {dns_type} 记录：现有 {len(existing)} 条，目标 {len(desired_ips)} 条")
+            # Preserve matching record IDs even if speed ranking changes. Only reuse
+            # records that are no longer wanted; delete extras after successful writes.
+            remaining = list(existing)
+            matched = {}
+            for ip in desired_ips:
+                rec = next((r for r in remaining if r.get("content") == ip), None)
+                if rec is not None:
+                    matched[ip] = rec
+                    remaining.remove(rec)
+            for ip in desired_ips:
+                payload = {"type": dns_type, "name": domain, "content": ip, "ttl": ttl, "proxied": proxied}
+                rec = matched.get(ip)
+                if rec is None and remaining:
+                    rec = remaining.pop(0)
+                if rec is not None:
+                    rid = rec["id"]
+                    effective_ttl = 1 if proxied else ttl
+                    if rec.get("content") == ip and int(rec.get("ttl") or ttl) == int(effective_ttl) and bool(rec.get("proxied", False)) == bool(proxied):
+                        continue
+                    cf_request("PATCH", f"/zones/{zone_id}/dns_records/{rid}", token, payload)
+                else:
+                    cf_request("POST", f"/zones/{zone_id}/dns_records", token, payload)
 
-        for rec in remaining:
-            rid = rec.get("id")
-            if rid:
-                cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
-        log(f"[✓] {domain} 的 {dns_type} 记录同步完成")
+            for rec in remaining:
+                rid = rec.get("id")
+                if rid:
+                    cf_request("DELETE", f"/zones/{zone_id}/dns_records/{rid}", token)
+            actual = cf_request_all(token, f"/zones/{zone_id}/dns_records?{q}")
+            actual = [r for r in actual if str(r.get("type", "")).upper() == dns_type and str(r.get("name", "")).lower() == domain.lower()]
+            actual_ips = [str(ipaddress.ip_address(r.get("content", ""))) for r in actual]
+            effective_ttl = 1 if proxied else ttl
+            if (sorted(actual_ips) != sorted(desired_ips)
+                    or any(r.get("ttl") != effective_ttl or r.get("proxied") != proxied for r in actual)):
+                raise RuntimeError("DNS API 回读与目标不一致")
+            log(f"[✓] {domain} 的 {dns_type} 记录 API 回读验证通过")
+
+            outcomes.append({"domain": domain, "status": "verified"})
+        except Exception as exc:
+            # Do not persist API response bodies or tokens in run summaries.
+            log(f"[!] {domain} 的 {dns_type} 同步/回读失败 ({type(exc).__name__})，可能已部分写入；继续其他域名")
+            outcomes.append({"domain": domain, "status": "failed", "error": type(exc).__name__})
+    return outcomes
 
 
 def run_mode(mode, cfg, mcis_bin):
@@ -418,7 +453,7 @@ def run_mode(mode, cfg, mcis_bin):
     cidr_file = PROJECT_DIR / ("ipv4cidr.txt" if mode == "4" else "ipv6cidr.txt")
     if not cidr_file.exists():
         log(f"[!] 跳过 IPv{mode}: 缺少 {cidr_file}")
-        return
+        return {"mode": mode, "status": "failed", "reason": "missing_cidr"}
 
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
     host = MCIS_HOST or PROBE_FALLBACK_HOST
@@ -461,15 +496,16 @@ def run_mode(mode, cfg, mcis_bin):
             raise RuntimeError(f"mcis 执行失败，IPv{mode}，退出码: {e.returncode}")
 
     sort_mode, best = parse_json_lines(result_file)
+    best = [row for row in best if ipaddress.ip_address(row["ip"]).version == int(mode)]
     best = apply_result_filters(best)[:TOP_N]
     if not best:
         previous = load_previous_best(mode) if KEEP_LAST_ON_FAIL else []
         if previous:
             log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，已保留旧 DNS 记录和旧结果，共 {len(previous)} 条")
-            return
+            return {"mode": mode, "status": "kept_old", "selected_count": 0}
         if KEEP_LAST_ON_FAIL:
             log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，未更新 DNS")
-            return
+            return {"mode": mode, "status": "no_results", "selected_count": 0}
         raise RuntimeError(f"IPv{mode} 没有找到可用 IP")
 
     zero_speed = sum(1 for row in best if float(row.get("download_mbps") or 0) <= 0)
@@ -480,6 +516,11 @@ def run_mode(mode, cfg, mcis_bin):
     if missing_latency:
         log(f"[!] IPv{mode} 有 {missing_latency} 个结果缺少延迟字段，已尝试用 total_ms / ttfb_ms / connect_ms 兜底")
 
+    if SCAN_ONLY:
+        atomic_json_write(PROJECT_DIR / f"scan_only_v{mode}.json", {"mode": sort_mode, "result": best})
+        log(f"[✓] IPv{mode} 仅测速完成，未调用 DNS API，未覆盖已同步结果")
+        return {"mode": mode, "status": "scan_only", "selected_count": len(best)}
+
     token = str(cfg.get("cloudflare", {}).get("token", "") or "").strip()
     ttl = cfg.get("cloudflare", {}).get("ttl", 60)
     proxied = cfg.get("cloudflare", {}).get("proxied", False)
@@ -489,10 +530,13 @@ def run_mode(mode, cfg, mcis_bin):
     if not records:
         raise RuntimeError("至少要配置一个域名")
 
-    update_dns_records(token, records, dns_type, best, ttl, proxied)
-
-    atomic_json_write(PROJECT_DIR / f"best_ips_v{mode}.json", {"mode": sort_mode, "result": best})
-    log(f"[✓] IPv{mode} 已同步到 {len(records)} 个域名，排序依据: {sort_mode}")
+    domains = update_dns_records(token, records, dns_type, best, ttl, proxied)
+    verified = sum(item["status"] == "verified" for item in domains)
+    status = "verified" if verified == len(domains) else ("partial_failure" if verified else "failed")
+    if status == "verified":
+        atomic_json_write(PROJECT_DIR / f"best_ips_v{mode}.json", {"mode": sort_mode, "result": best})
+    log(f"[*] IPv{mode} DNS 验证通过 {verified}/{len(domains)}，状态: {status}")
+    return {"mode": mode, "status": status, "selected_count": len(best), "domains": domains}
 
 
 def atomic_json_write(path, data):
@@ -516,23 +560,57 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("已有优选任务运行中")
-        run_all_modes()
+        return run_all_modes()
 
 
 def run_all_modes():
-    cfg = load_config()
-    mcis_bin = ensure_mcis()
-    modes = ["4", "6"] if IP_MODE == "both" else [IP_MODE]
-    for mode in modes:
-        if mode not in ("4", "6"):
-            raise RuntimeError(f"无效的 IP_MODE: {IP_MODE}")
-        run_mode(mode, cfg, mcis_bin)
-    log("[✓] 全部执行完成")
+    started = time.time()
+    results = []
+    try:
+        for name, value in (("MAX_LATENCY_MS", MAX_LATENCY_MS), ("MIN_LATENCY_MS", MIN_LATENCY_MS),
+                            ("MAX_LOSS_RATE", MAX_LOSS_RATE), ("MIN_DOWNLOAD_MBPS", MIN_DOWNLOAD_MBPS)):
+            if not math.isfinite(value) or value < 0 or (name == "MAX_LOSS_RATE" and value > 1):
+                raise ValueError(f"无效 {name}")
+        if MAX_LATENCY_MS and MIN_LATENCY_MS > MAX_LATENCY_MS:
+            raise ValueError("最小延迟不能大于最大延迟")
+        cfg = {} if SCAN_ONLY else load_config()
+        mcis_bin = ensure_mcis()
+        modes = ["4", "6"] if IP_MODE == "both" else [IP_MODE]
+        for mode in modes:
+            try:
+                if mode not in ("4", "6"):
+                    raise ValueError("无效 IP_MODE")
+                results.append(run_mode(mode, cfg, mcis_bin))
+            except Exception as exc:
+                log(f"[!] IPv{mode} 失败: {type(exc).__name__}")
+                results.append({"mode": mode, "status": "failed", "error": type(exc).__name__})
+    except Exception as exc:
+        log(f"[!] 初始化失败: {type(exc).__name__}")
+        results.append({"status": "failed", "error": type(exc).__name__})
+    statuses = {r["status"] for r in results}
+    if statuses <= {"verified", "scan_only"}:
+        status, code = ("scan_only" if SCAN_ONLY else "verified"), 0
+    elif statuses & {"failed", "partial_failure"}:
+        status, code = ("partial_failure" if statuses & {"verified", "scan_only", "partial_failure"} else "failed"), 1
+    else:
+        status, code = "no_new_results", 2
+    summary = {"started_at": started, "ended_at": time.time(), "scan_only": SCAN_ONLY,
+               "status": status, "code": code, "results": results}
+    history_path = PROJECT_DIR / "run_history.json"
+    try:
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        if not isinstance(history, list):
+            history = []
+    except (OSError, ValueError):
+        history = []
+    atomic_json_write(history_path, (history + [summary])[-HISTORY_LIMIT:])
+    log(f"[*] 本次执行结束: {status}，退出码 {code}")
+    return code
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
         print(f"[HTTP 错误] {e} {body}", file=sys.stderr)

@@ -19,7 +19,7 @@ class RunnerTests(unittest.TestCase):
             if failure:
                 raise RuntimeError(failure)
             return {'success': True}
-        with patch.object(runner, 'resolve_zone_id', return_value='zone'), patch.object(runner, 'cf_request_all', return_value=existing), patch.object(runner, 'cf_request', side_effect=request):
+        with patch.object(runner, 'resolve_zone_id', return_value='zone'), patch.object(runner, 'cf_request_all', side_effect=[existing, [dict(type='A', name='cf.example.com', content=ip, ttl=60, proxied=False) for ip in best]]), patch.object(runner, 'cf_request', side_effect=request):
             runner.update_dns_records('secret', [{'domain': 'cf.example.com'}], 'A', [{'ip': ip} for ip in best], 60, False)
         return calls
 
@@ -47,8 +47,8 @@ class RunnerTests(unittest.TestCase):
 
     def test_write_failure_prevents_deletion(self):
         with patch.object(runner, 'resolve_zone_id', return_value='zone'), patch.object(runner, 'cf_request_all', return_value=self.records()), patch.object(runner, 'cf_request', side_effect=RuntimeError('failed')) as request:
-            with self.assertRaises(RuntimeError):
-                runner.update_dns_records('token', [{'domain': 'cf.example.com'}], 'A', [{'ip': '8.8.8.8'}], 60, False)
+            result = runner.update_dns_records('token', [{'domain': 'cf.example.com'}], 'A', [{'ip': '8.8.8.8'}], 60, False)
+            self.assertEqual(result[0]['status'], 'failed')
             self.assertEqual([call.args[0] for call in request.call_args_list], ['PATCH'])
 
     def test_nonfinite_metrics_rejected(self):

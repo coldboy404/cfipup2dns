@@ -160,7 +160,7 @@
                   <div><label for="advCfColo">地区码过滤</label><input id="advCfColo" value="{{ADV_CF_COLO}}" placeholder="例如 HKG,NRT,SJC" /></div>
                   <div><label>&nbsp;</label><div class="switch"><span>失败时保留旧 DNS</span><input id="advKeepLast" type="checkbox" {{ADV_KEEP_LAST_CHECKED}} /></div></div>
                 </div>
-                <div class="hint"><strong>建议：</strong>下载模式默认用 sequential；0 表示不限制。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
+                <div class="hint"><strong>建议：</strong>下载模式默认用 sequential；延迟/速度阈值 0 表示不限制，丢包上限 1 表示不限制、0 表示零丢包。启用过滤时缺少相应指标会被拒绝。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
               </div>
             </details>
             <div class="toolbar">
@@ -191,11 +191,15 @@
               <button id="runButton" class="warn" onclick="runNow()">立即运行</button>
             </div>
           </div>
+          <div class="switch" style="margin-top:12px"><span>仅测速（本次不修改 DNS）</span><input id="scanOnly" type="checkbox" /></div>
           <div class="toolbar" style="margin:12px 0">
             <button id="stopButton" class="danger" onclick="stopNow()" disabled>停止当前任务</button>
           </div>
           <div class="hint">停止会终止本次测速及其子进程，不撤销已经完成的 DNS 更新；定时计划仍保留。</div>
           <div class="status" id="runState">空闲</div>
+          <div class="status" id="runSummary">暂无运行摘要</div>
+          <details><summary>最近运行历史（最多 30 次）</summary><div id="runHistory"></div></details>
+          <details><summary>仅测速候选（不代表当前 DNS；可能为上次结果）</summary><div id="scanResults"></div></details>
           <div class="toolbar" style="margin-top:12px">
             <select id="exportMode" aria-label="导出 IP 模式"><option value="both">导出 IPv4 / IPv6</option><option value="4">仅 IPv4</option><option value="6">仅 IPv6</option></select>
             <button class="secondary" onclick="downloadResults('csv')">导出 CSV</button>
@@ -331,7 +335,7 @@ function applySchedule(schedule) {
 
 async function saveConfig() {
   const payload = collectConfig();
-  if (!payload.records_text.trim()) return alert('多域名配置不能为空');
+  // Empty DNS configuration is valid for scan-only runs.
   const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const j = await r.json();
   if (!j.ok) return alert(j.error || '保存失败');
@@ -361,7 +365,7 @@ function toggleToken() {
 function formatNumber(v) {
   if (v === null || v === undefined || v === '') return '';
   const n = Number(v);
-  if (Number.isNaN(n)) return '';
+  if (!Number.isFinite(n)) return '';
   return String(Math.round(n));
 }
 
@@ -413,7 +417,7 @@ async function runNow() {
   const r = await fetch('/api/run', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ip_mode, top_n})
+    body: JSON.stringify({ip_mode, top_n, scan_only: document.getElementById('scanOnly').checked})
   });
   const j = await r.json();
   if (!j.ok) alert(j.error || '已有任务在运行');
@@ -467,6 +471,15 @@ async function loadStatus() {
   const state = j.running ? (j.cancelled ? '正在停止' : '运行中') : ((j.cancelled ? '已停止' : '空闲') + (j.code === null ? '' : ` / 退出码 ${j.code}`));
   document.getElementById('runState').innerHTML = `${state}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
   renderRunStateMeta(j.selected_ips_updated_at, j.next_run_at);
+  const labels = {verified: 'DNS API 回读已验证', scan_only: '仅测速完成（未改 DNS）', no_new_results: '无新结果，保留现有 DNS', partial_failure: '部分失败，请检查域名明细', failed: '失败，可能已有部分写入', kept_old: '保留旧结果', no_results: '无候选'};
+  const describe = s => `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status} / ${JSON.stringify(s.results || [])}`;
+  document.getElementById('runSummary').textContent = j.last_summary ? '最近完整摘要：' + describe(j.last_summary) : '暂无完整摘要';
+  const history = await (await fetch('/api/history')).json();
+  document.getElementById('runHistory').textContent = (history.history || []).slice().reverse().map(describe).join('\n');
+  document.getElementById('runHistory').style.whiteSpace = 'pre-wrap';
+  const scans = await (await fetch('/api/scan-results')).json();
+  document.getElementById('scanResults').textContent = (scans.result || []).map(row => `${row.ip} / ${row.download_mbps ?? '--'} Mbps / ${row.latency_ms ?? '--'} ms`).join('\n') || '暂无仅测速结果';
+  document.getElementById('scanResults').style.whiteSpace = 'pre-wrap';
   if (j.selected_ips && j.selected_ips.length) {
     renderBestIps(j.selected_ips);
   }

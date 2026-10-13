@@ -23,6 +23,7 @@ class ApiTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.patches = [
             mock.patch.dict(os.environ, {"WEB_USERNAME": "", "WEB_PASSWORD": ""}),
+            mock.patch.object(app, "PROJECT_DIR", self.root),
             mock.patch.object(app, "CONFIG_FILE", self.root / "config.json"),
             mock.patch.object(app, "CRON_FILE", self.root / "cron"),
             mock.patch.object(app, "LOG_FILE", self.root / "log"),
@@ -142,6 +143,23 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.request("GET", f"/api/export?format=txt&ip_mode={mode}")[2], expected)
         self.assertEqual(self.request("GET", "/api/export?format=../../config.json")[0], 400)
         self.assertEqual(self.request("GET", "/api/export?ip_mode=7")[0], 400)
+
+    def test_scan_only_api_and_persisted_history(self):
+        with mock.patch.object(app, "trigger_run", return_value=True) as trigger:
+            self.assertEqual(self.request("POST", "/api/run", {"scan_only": True})[0], 200)
+            self.assertEqual(trigger.call_args.args[0]["SCAN_ONLY"], "true")
+            self.assertEqual(self.request("POST", "/api/run", {})[0], 200)
+            self.assertEqual(trigger.call_args.args[0]["SCAN_ONLY"], "false")
+            self.assertEqual(self.request("POST", "/api/run", {"scan_only": "false"})[0], 400)
+        summary = {"status": "no_new_results", "results": [{"status": "kept_old"}]}
+        (self.root / "run_history.json").write_text(json.dumps([summary]))
+        (self.root / "scan_only_v4.json").write_text(json.dumps({"result": [{"ip": "1.1.1.1"}]}))
+        self.assertEqual(json.loads(self.request("GET", "/api/history")[2])["history"], [summary])
+        self.assertEqual(json.loads(self.request("GET", "/api/status")[2])["last_summary"], summary)
+        self.assertEqual(json.loads(self.request("GET", "/api/scan-results")[2])["result"][0]["ip"], "1.1.1.1")
+        with mock.patch.dict(os.environ, {"WEB_USERNAME": "admin", "WEB_PASSWORD": "secret"}):
+            for path in ("/api/history", "/api/scan-results"):
+                self.assertEqual(self.request("GET", path)[0], 401)
 
     def test_empty_export(self):
         self.assertEqual(self.request("GET", "/api/export?format=txt")[2], "")
