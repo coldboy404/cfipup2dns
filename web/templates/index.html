@@ -160,7 +160,16 @@
                   <div><label for="advCfColo">地区码过滤</label><input id="advCfColo" value="{{ADV_CF_COLO}}" placeholder="例如 HKG,NRT,SJC" /></div>
                   <div><label>&nbsp;</label><div class="switch"><span>失败时保留旧 DNS</span><input id="advKeepLast" type="checkbox" {{ADV_KEEP_LAST_CHECKED}} /></div></div>
                 </div>
-                <div class="hint"><strong>建议：</strong>下载模式默认用 sequential；延迟/速度阈值 0 表示不限制，丢包上限 1 表示不限制、0 表示零丢包。启用过滤时缺少相应指标会被拒绝。地区码字段取决于底层 mcis 是否输出 colo/pop 信息；没有地区字段时，启用地区过滤会过滤掉未知地区结果。</div>
+                <div class="row-3">
+                  <div><label for="advSwitchImprovement">最小切换改善率 0~1</label><input id="advSwitchImprovement" type="number" min="0" max="1" step="0.01" value="{{ADV_SWITCH_MIN_IMPROVEMENT}}" /></div>
+                  <div><label for="advSwitchInterval">最小切换间隔（秒）</label><input id="advSwitchInterval" type="number" min="0" value="{{ADV_SWITCH_MIN_INTERVAL}}" /></div>
+                  <div><label for="advFailureThreshold">现有 IP 连续失败阈值</label><input id="advFailureThreshold" type="number" min="1" max="20" value="{{ADV_SWITCH_FAILURE_THRESHOLD}}" /></div>
+                </div>
+                <div class="row-2">
+                  <div><label for="advRecheckRounds">同轮直连复测次数</label><input id="advRecheckRounds" type="number" min="1" max="20" value="{{ADV_SWITCH_RECHECK_ROUNDS}}" /></div>
+                  <div><label for="advRecheckTimeout">每次直连复测总超时（秒）</label><input id="advRecheckTimeout" type="number" min="0.1" max="60" step="0.1" value="{{ADV_SWITCH_RECHECK_TIMEOUT}}" /></div>
+                </div>
+                <div class="hint"><strong>建议：</strong>切换只比较本轮对现有 IP 和候选 IP 的相同 HTTPS 直连总耗时（TLS 证书和 Host 均验证），默认至少改善 20%、间隔 6 小时；现有 IP 连续 2 轮全部失败才故障切换。mcis JSONL 没有每 IP 丢包率，启用丢包过滤时使用重复 HTTPS 失败率，不会把网段计数冒充丢包。legacy latency_ms 明确定义为 total_ms 优先、再回退 ttfb/connect。</div>
               </div>
             </details>
             <div class="toolbar">
@@ -299,6 +308,11 @@ function collectConfig() {
       max_loss_rate: document.getElementById('advMaxLoss').value,
       cf_colo: document.getElementById('advCfColo').value.trim(),
       keep_last_on_fail: document.getElementById('advKeepLast').checked ? 'true' : 'false',
+      switch_min_improvement: document.getElementById('advSwitchImprovement').value,
+      switch_min_interval: document.getElementById('advSwitchInterval').value,
+      switch_failure_threshold: document.getElementById('advFailureThreshold').value,
+      switch_recheck_rounds: document.getElementById('advRecheckRounds').value,
+      switch_recheck_timeout: document.getElementById('advRecheckTimeout').value,
     },
   };
 }
@@ -323,6 +337,11 @@ function applyForm(form) {
   document.getElementById('advMaxLoss').value = adv.max_loss_rate || '1';
   document.getElementById('advCfColo').value = adv.cf_colo || '';
   document.getElementById('advKeepLast').checked = !['0', 'false', 'no', 'off'].includes(String(adv.keep_last_on_fail || 'true').toLowerCase());
+  document.getElementById('advSwitchImprovement').value = adv.switch_min_improvement || '0.20';
+  document.getElementById('advSwitchInterval').value = adv.switch_min_interval || '21600';
+  document.getElementById('advFailureThreshold').value = adv.switch_failure_threshold || '2';
+  document.getElementById('advRecheckRounds').value = adv.switch_recheck_rounds || '3';
+  document.getElementById('advRecheckTimeout').value = adv.switch_recheck_timeout || '5';
 }
 
 function applySchedule(schedule) {
@@ -395,7 +414,12 @@ function renderBestIps(items) {
     const tags = [
       `<span class="tag">IPv${escapeHtml(item.version)}</span>`,
       speed > 0 ? `<span class="tag">下载 ${formatNumber(speed)} Mbps</span>` : `<span class="tag">下载未测出</span>`,
-      hasLatency ? `<span class="tag">延迟 ${formatNumber(latencyVal)} ms</span>` : `<span class="tag">延迟未测出</span>`,
+      item.total_ms != null ? `<span class="tag">总耗时 ${formatNumber(item.total_ms)} ms</span>` : (hasLatency ? `<span class="tag">兼容延迟 ${formatNumber(latencyVal)} ms</span>` : `<span class="tag">总耗时未测出</span>`),
+      item.connect_ms != null ? `<span class="tag">连接 ${formatNumber(item.connect_ms)} ms</span>` : '',
+      item.tls_ms != null ? `<span class="tag">TLS ${formatNumber(item.tls_ms)} ms</span>` : '',
+      item.ttfb_ms != null ? `<span class="tag">TTFB ${formatNumber(item.ttfb_ms)} ms</span>` : '',
+      item.loss_rate != null ? `<span class="tag">HTTPS 复测失败率 ${formatNumber(Number(item.loss_rate) * 100)}%</span>` : '',
+      item.colo ? `<span class="tag">机房 ${escapeHtml(item.colo)}</span>` : '',
     ].filter(Boolean).join('');
     return `<div class="ip-item"><div class="ip-main"><code>${escapeHtml(item.ip)}</code></div><div class="ip-tags">${tags}</div></div>`;
   }).join('');
@@ -472,13 +496,18 @@ async function loadStatus() {
   document.getElementById('runState').innerHTML = `${state}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
   renderRunStateMeta(j.selected_ips_updated_at, j.next_run_at);
   const labels = {verified: 'DNS API 回读已验证', scan_only: '仅测速完成（未改 DNS）', no_new_results: '无新结果，保留现有 DNS', partial_failure: '部分失败，请检查域名明细', failed: '失败，可能已有部分写入', kept_old: '保留旧结果', no_results: '无候选'};
-  const describe = s => `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status} / ${JSON.stringify(s.results || [])}`;
+  const reasons = {bootstrap: '首次写入已验证候选', bootstrap_no_verified_candidate: '首次写入无完整成功候选', benefit_too_small: '改善不足，保留现有记录', cooldown: '处于正常切换冷却期', incumbent_still_best: '现有记录仍为最优或候选已重合', minimum_improvement_met: '逐槽改善达到阈值', incumbent_failure_threshold: '单个现有 IP 连续全失败，已故障替换', incumbent_failed_no_verified_candidate: '现有 IP 已确认失败但无完整成功候选', recheck_uncertain_keep: '复测不确定，保留现有记录', dns_sync_or_readback_failed: 'DNS 写入或 API 回读验证失败，可能已部分写入'};
+  const reasonText = reason => reasons[reason] || (String(reason || '').startsWith('incumbent_failure_wait_') ? `现有 IP 连续全失败次数尚未达到阈值（${String(reason).replace('incumbent_failure_wait_', '')}）` : (reason || ''));
+  const describe = s => {
+    const details = (s.results || []).flatMap(result => (result.domains || []).map(domain => `${domain.domain}: ${reasonText(domain.reason || domain.error)}${domain.policy_reason ? `（策略：${reasonText(domain.policy_reason)}）` : ''}`)).filter(Boolean);
+    return `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status}${details.length ? ' / ' + details.join('；') : ''}`;
+  };
   document.getElementById('runSummary').textContent = j.last_summary ? '最近完整摘要：' + describe(j.last_summary) : '暂无完整摘要';
   const history = await (await fetch('/api/history')).json();
   document.getElementById('runHistory').textContent = (history.history || []).slice().reverse().map(describe).join('\n');
   document.getElementById('runHistory').style.whiteSpace = 'pre-wrap';
   const scans = await (await fetch('/api/scan-results')).json();
-  document.getElementById('scanResults').textContent = (scans.result || []).map(row => `${row.ip} / ${row.download_mbps ?? '--'} Mbps / ${row.latency_ms ?? '--'} ms`).join('\n') || '暂无仅测速结果';
+  document.getElementById('scanResults').textContent = (scans.result || []).map(row => `${row.ip} / 下载 ${row.download_mbps ?? '--'} Mbps / 总耗时 ${row.total_ms ?? row.latency_ms ?? '--'} ms / 连接 ${row.connect_ms ?? '--'} / TLS ${row.tls_ms ?? '--'} / TTFB ${row.ttfb_ms ?? '--'} / 机房 ${row.colo ?? '--'}`).join('\n') || '暂无仅测速结果';
   document.getElementById('scanResults').style.whiteSpace = 'pre-wrap';
   if (j.selected_ips && j.selected_ips.length) {
     renderBestIps(j.selected_ips);

@@ -39,6 +39,13 @@ class WebConfigTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 app.validated_number(value, "rounds", 1, 100, integer=True)
 
+    def test_switch_timeout_is_bounded(self):
+        advanced = dict(app.ADVANCED_DEFAULTS)
+        for value in ('0.09', '60.01'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                advanced['switch_recheck_timeout'] = value
+                app.validate_advanced(advanced)
+
     def test_export_uses_address_family_not_untrusted_version_label(self):
         with mock.patch.object(app, "get_selected_ips", return_value={"items": [
             {"version": "6", "ip": "1.1.1.1"},

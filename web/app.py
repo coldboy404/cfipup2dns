@@ -76,6 +76,11 @@ ADVANCED_DEFAULTS = {
     "max_loss_rate": os.getenv("MAX_LOSS_RATE", "1"),
     "cf_colo": os.getenv("CF_COLO", ""),
     "keep_last_on_fail": os.getenv("KEEP_LAST_ON_FAIL", "true"),
+    "switch_min_improvement": os.getenv("SWITCH_MIN_IMPROVEMENT", "0.20"),
+    "switch_min_interval": os.getenv("SWITCH_MIN_INTERVAL", "21600"),
+    "switch_failure_threshold": os.getenv("SWITCH_FAILURE_THRESHOLD", "2"),
+    "switch_recheck_rounds": os.getenv("SWITCH_RECHECK_ROUNDS", "3"),
+    "switch_recheck_timeout": os.getenv("SWITCH_RECHECK_TIMEOUT", "5"),
 }
 
 
@@ -391,10 +396,14 @@ def validated_number(value, name, low, high, integer=False):
 
 
 def validate_advanced(advanced):
-    for key, low, high in (("rounds", 1, 1000), ("download_top", 0, 10000)):
+    for key, low, high in (("rounds", 1, 1000), ("download_top", 0, 10000),
+                           ("switch_min_interval", 0, 31536000), ("switch_failure_threshold", 1, 20),
+                           ("switch_recheck_rounds", 1, 20)):
         validated_number(advanced[key], key, low, high, integer=True)
-    for key in ("min_download_mbps", "max_latency_ms", "min_latency_ms", "max_loss_rate"):
-        validated_number(advanced[key], key, 0, 1 if key == "max_loss_rate" else 1000000)
+    for key in ("min_download_mbps", "max_latency_ms", "min_latency_ms", "max_loss_rate",
+                "switch_min_improvement", "switch_recheck_timeout"):
+        high = 1 if key in ("max_loss_rate", "switch_min_improvement") else (60 if key == "switch_recheck_timeout" else 1000000)
+        validated_number(advanced[key], key, 0 if key != "switch_recheck_timeout" else 0.1, high)
     if float(advanced["max_latency_ms"]) and float(advanced["min_latency_ms"]) > float(advanced["max_latency_ms"]):
         raise ValueError("最小延迟不能大于最大延迟")
     for key in ("timeout", "download_timeout"):
@@ -570,12 +579,19 @@ def next_run_time(now_ts=None):
 def normalize_ip_row(version, row):
     latency = row.get("latency_ms")
     if latency in (None, ""):
-        latency = row.get("total_ms") or row.get("ttfb_ms") or row.get("connect_ms")
+        latency = next((row.get(key) for key in ("total_ms", "ttfb_ms", "connect_ms")
+                        if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool) and math.isfinite(row.get(key)) and row.get(key) > 0), None)
     return {
         "version": version,
         "ip": row.get("ip"),
         "latency_ms": latency,
+        "connect_ms": row.get("connect_ms"),
+        "tls_ms": row.get("tls_ms"),
+        "ttfb_ms": row.get("ttfb_ms"),
+        "total_ms": row.get("total_ms"),
         "download_mbps": row.get("download_mbps"),
+        "colo": row.get("colo"),
+        "loss_rate": row.get("loss_rate"),
     }
 
 
@@ -610,6 +626,11 @@ def render_index():
         "ADV_MAX_LOSS_RATE": html.escape(state["advanced"].get("max_loss_rate", "1")),
         "ADV_CF_COLO": html.escape(state["advanced"].get("cf_colo", "")),
         "ADV_KEEP_LAST_CHECKED": "checked" if state["advanced"].get("keep_last_on_fail", "true").lower() not in ("0", "false", "no", "off") else "",
+        "ADV_SWITCH_MIN_IMPROVEMENT": html.escape(state["advanced"].get("switch_min_improvement", "0.20")),
+        "ADV_SWITCH_MIN_INTERVAL": html.escape(state["advanced"].get("switch_min_interval", "21600")),
+        "ADV_SWITCH_FAILURE_THRESHOLD": html.escape(state["advanced"].get("switch_failure_threshold", "2")),
+        "ADV_SWITCH_RECHECK_ROUNDS": html.escape(state["advanced"].get("switch_recheck_rounds", "3")),
+        "ADV_SWITCH_RECHECK_TIMEOUT": html.escape(state["advanced"].get("switch_recheck_timeout", "5")),
     }
     return fill_template(tpl, mapping)
 
@@ -693,6 +714,11 @@ def apply_advanced_env(env):
         "max_loss_rate": "MAX_LOSS_RATE",
         "cf_colo": "CF_COLO",
         "keep_last_on_fail": "KEEP_LAST_ON_FAIL",
+        "switch_min_improvement": "SWITCH_MIN_IMPROVEMENT",
+        "switch_min_interval": "SWITCH_MIN_INTERVAL",
+        "switch_failure_threshold": "SWITCH_FAILURE_THRESHOLD",
+        "switch_recheck_rounds": "SWITCH_RECHECK_ROUNDS",
+        "switch_recheck_timeout": "SWITCH_RECHECK_TIMEOUT",
     }
     for key, env_key in mapping.items():
         val = str(advanced.get(key, "") or "").strip()
@@ -830,17 +856,19 @@ def export_results(fmt, version):
         seen.add(str(ip))
         row = {"version": str(ip.version), "ip": str(ip)}
         # Only allow numeric metrics: no arbitrary strings/spreadsheet formulas.
-        for key in ("latency_ms", "download_mbps"):
+        for key in ("latency_ms", "connect_ms", "tls_ms", "ttfb_ms", "total_ms", "download_mbps", "loss_rate"):
             try:
                 number = float(item.get(key))
                 row[key] = str(number) if math.isfinite(number) and number >= 0 else ""
             except (TypeError, ValueError):
                 row[key] = ""
+        colo = str(item.get("colo", "") or "").strip().upper()
+        row["colo"] = colo[:64] if re.fullmatch(r"[A-Z0-9_-]{1,64}", colo) else ""
         rows.append(row)
     if fmt == "txt":
         return "".join(row["ip"] + "\n" for row in rows)
     out = io.StringIO(newline="")
-    writer = csv.DictWriter(out, fieldnames=("version", "ip", "latency_ms", "download_mbps"))
+    writer = csv.DictWriter(out, fieldnames=("version", "ip", "colo", "latency_ms", "connect_ms", "tls_ms", "ttfb_ms", "total_ms", "download_mbps", "loss_rate"))
     writer.writeheader()
     writer.writerows(rows)
     return out.getvalue()

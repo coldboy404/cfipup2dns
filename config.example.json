@@ -26,6 +26,11 @@
     "min_latency_ms": "0",
     "max_loss_rate": "1",
     "cf_colo": "",
-    "keep_last_on_fail": "true"
+    "keep_last_on_fail": "true",
+    "switch_min_improvement": "0.20",
+    "switch_min_interval": "21600",
+    "switch_failure_threshold": "2",
+    "switch_recheck_rounds": "3",
+    "switch_recheck_timeout": "5"
   }
 }
