@@ -57,6 +57,13 @@ MAX_LATENCY_MS = float(os.getenv("MAX_LATENCY_MS", "0") or 0)
 MIN_LATENCY_MS = float(os.getenv("MIN_LATENCY_MS", "0") or 0)
 MAX_LOSS_RATE = float(os.getenv("MAX_LOSS_RATE", "1") or 1)
 MIN_DOWNLOAD_MBPS = float(os.getenv("MIN_DOWNLOAD_MBPS", "0") or 0)
+SELECT_PROFILE = os.getenv("SELECT_PROFILE", "throughput").strip().lower()
+CANDIDATE_POOL = max(50, min(1000, int(os.getenv("CANDIDATE_POOL", "200"))))
+DOWNLOAD_QUALIFY_MBPS = float(os.getenv("DOWNLOAD_QUALIFY_MBPS", "10") or 0)
+DOWNLOAD_RECHECK_ROUNDS = int(os.getenv("DOWNLOAD_RECHECK_ROUNDS", "2"))
+SWITCH_DOWNLOAD_BUDGET = os.getenv("SWITCH_DOWNLOAD_BUDGET", "180s")
+DIVERSITY_PREFIX_V4 = int(os.getenv("DIVERSITY_PREFIX_V4", "16"))
+DIVERSITY_PREFIX_V6 = int(os.getenv("DIVERSITY_PREFIX_V6", "40"))
 CF_COLO = os.getenv("CF_COLO", "").strip().upper()
 SCAN_ONLY = os.getenv("SCAN_ONLY", "false").strip().lower() in ("1", "true", "yes", "on")
 SWITCH_MIN_IMPROVEMENT = float(os.getenv("SWITCH_MIN_IMPROVEMENT", "0.20") or 0.20)
@@ -517,6 +524,130 @@ def add_per_ip_loss_rechecks(rows, host, path):
     return qualified[:TOP_N]
 
 
+def recheck_downloads(ips, rounds=None, deadline=None):
+    """Fresh serial direct-IP samples; incomplete rounds never become evidence."""
+    rounds = DOWNLOAD_RECHECK_ROUNDS if rounds is None else int(rounds)
+    unique = list(dict.fromkeys(ips))
+    if not 1 <= rounds <= 3 or len(unique) > MAX_RECHECK_IPS:
+        raise ValueError('invalid download recheck bounds')
+    deadline = time.monotonic() + duration_seconds(SWITCH_DOWNLOAD_BUDGET) if deadline is None else deadline
+    window = duration_seconds(DOWNLOAD_WINDOW)
+    cap = min(duration_seconds(DOWNLOAD_TIMEOUT), window + 9)
+    download_target(DOWNLOAD_URL)
+    results = {}
+    # Complete each IP's bounded rounds before advancing. Callers interleave
+    # incumbents/replacements so a tight budget can still verify useful pairs.
+    for ip in unique:
+        measured_at = time.time()
+        values = []
+        for _ in range(rounds):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            log(f'[*] DNS 吞吐复测 ip={ip} round={len(values)+1}/{rounds} budget_left={left:.1f}s')
+            sample = sample_download(ip, DOWNLOAD_URL, window_seconds=window,
+                                     timeout_seconds=min(cap, left), max_bytes=int(DOWNLOAD_BYTES))
+            speed = _float_or_none(sample.get('download_mbps'))
+            values.append(speed if sample.get('download_ok') and speed is not None and speed > 0 else None)
+        ok = len(values) == rounds and all(value is not None for value in values)
+        results[ip] = {'download_recheck_ok': ok, 'download_ok': ok,
+                       'download_mbps': statistics.median(values) if ok else None,
+                       'download_recheck_attempts': len(values), 'download_recheck_rounds': rounds,
+                       'download_method': 'windowed_http_median', 'download_source': 'direct_ip',
+                       'download_measured_at': measured_at}
+    return results
+
+
+def diversity_prefix(ip):
+    address = ipaddress.ip_address(ip)
+    bits = DIVERSITY_PREFIX_V4 if address.version == 4 else DIVERSITY_PREFIX_V6
+    return str(ipaddress.ip_network(f'{address}/{bits}', strict=False))
+
+
+def diverse_candidates(rows):
+    """Stable bucket round-robin, retaining the input rank within each bucket."""
+    buckets = {}
+    for row in rows:
+        buckets.setdefault((row_colo(row), diversity_prefix(row['ip'])), []).append(row)
+    ordered = []
+    for index in range(max((len(bucket) for bucket in buckets.values()), default=0)):
+        ordered.extend(bucket[index] for bucket in buckets.values() if index < len(bucket))
+    return ordered
+
+
+def exploration_cidrs(cidr_file, rows, mode):
+    """Use only configured address space, removing already represented buckets.
+
+    address_exclude also handles broad custom CIDRs without expanding them into
+    individual addresses. Singleton and other narrow user networks stay narrow.
+    """
+    covered = sorted({ipaddress.ip_network(diversity_prefix(row['ip'])) for row in rows
+                      if ipaddress.ip_address(row['ip']).version == int(mode)},
+                     key=lambda net: int(net.network_address))
+    remaining = []
+    for line in cidr_file.read_text(encoding='utf-8').splitlines():
+        text = line.split('#', 1)[0].strip()
+        if not text:
+            continue
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            continue  # MCIS remains responsible for validating the original file.
+        if network.version != int(mode):
+            continue
+        parts = [network]
+        for bucket in covered:
+            next_parts = []
+            for part in parts:
+                if part.subnet_of(bucket):
+                    continue
+                next_parts.extend(part.address_exclude(bucket) if bucket.subnet_of(part) else [part])
+            parts = next_parts
+        remaining.extend(parts)
+    # Deduplicate while preserving the configured deterministic order.
+    return list(dict.fromkeys(str(part) for part in remaining))
+
+
+def scan_candidates(args, result_file, mode, cidr_file):
+    """75/25 exploitation/exploration split; total probes and time stay bounded."""
+    total_budget = int(args[args.index('-budget') + 1])
+    explore_budget = total_budget // 4 if SELECT_PROFILE == 'throughput' and total_budget >= 4 else 0
+    scan_seconds = MAX_SCAN_SECONDS or None
+    started = time.monotonic()
+    primary_args = list(args)
+    primary_args[primary_args.index('-budget') + 1] = str(total_budget - explore_budget)
+    primary_timeout = scan_seconds * .75 if explore_budget and scan_seconds else scan_seconds
+    meta = run_mcis(primary_args, result_file, mode, primary_timeout)
+    _, primary = parse_json_lines(result_file)
+    primary = [row for row in primary if ipaddress.ip_address(row['ip']).version == int(mode)]
+    extra_cidrs = exploration_cidrs(cidr_file, primary, mode) if explore_budget else []
+    meta.update(scan_primary_budget=total_budget - explore_budget, scan_exploration_budget=0)
+    left = scan_seconds - (time.monotonic() - started) if scan_seconds else None
+    if extra_cidrs and (left is None or left > 0):
+        with tempfile.TemporaryDirectory(prefix='.explore-', dir=PROJECT_DIR) as temporary:
+            subset = Path(temporary) / 'cidrs.txt'
+            output = Path(temporary) / 'rows.jsonl'
+            subset.write_text('\n'.join(extra_cidrs) + '\n', encoding='utf-8')
+            explore_args = list(args)
+            explore_args[explore_args.index('-cidr-file') + 1] = str(subset)
+            explore_args[explore_args.index('-budget') + 1] = str(explore_budget)
+            log(f'[*] IPv{mode} exploration: budget={explore_budget} configured_subnets={len(extra_cidrs)} excluding_primary_prefixes={len({diversity_prefix(r["ip"]) for r in primary})}')
+            extra_meta = run_mcis(explore_args, output, mode, left)
+            _, extra = parse_json_lines(output)
+            # Keep the main artifact complete, but never overwrite the CIDR file.
+            with result_file.open('ab') as combined:
+                combined.write(b'\n' + output.read_bytes())
+            primary.extend(row for row in extra if ipaddress.ip_address(row['ip']).version == int(mode))
+            meta['scan_timed_out'] = bool(meta.get('scan_timed_out') or extra_meta.get('scan_timed_out'))
+            meta['scan_exploration_budget'] = explore_budget
+    unique = {row['ip']: row for row in reversed(primary)}
+    rows = sorted(unique.values(), key=lambda row: _float_or_none(row.get('score_ms')) or math.inf)
+    meta['candidate_prefix_count'] = len({diversity_prefix(row['ip']) for row in rows})
+    meta['candidate_colo_count'] = len({row_colo(row) for row in rows})
+    log(f'[*] IPv{mode} diversity: prefixes={meta["candidate_prefix_count"]} colos={meta["candidate_colo_count"]} candidates={len(rows)}')
+    return rows, meta
+
+
 def row_colo(row):
     for key in ("colo", "cf_colo", "cfcolo", "location", "pop"):
         val = str(row.get(key, "") or "").strip().upper()
@@ -604,12 +735,22 @@ def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previ
     incumbent_ips = list(dict.fromkeys(incumbent_ips))
     candidate_ips = list(dict.fromkeys(r["ip"] for r in candidate_rows if r.get("ip")))
     usable_candidates = []
+    failure_candidates = []
     for ip in candidate_ips:
         check = checks.get(ip, {}) if isinstance(checks.get(ip, {}), dict) else {}
         attempts = int(_safe_nonnegative(check.get("attempts"), 0))
         successes = int(_safe_nonnegative(check.get("successes"), 0))
+        speed = _float_or_none(check.get('download_mbps'))
+        throughput_ok = (check.get('download_recheck_ok') is True and speed is not None
+                         and speed > 0 and speed >= MIN_DOWNLOAD_MBPS)
+        latency_ok = (not MAX_LATENCY_MS or 0 < _safe_nonnegative(check.get('total_ms')) <= MAX_LATENCY_MS)
         if attempts and successes == attempts:
-            usable_candidates.append(ip)
+            # An actual HTTPS outage keeps its pre-existing recovery policy.
+            # Explicit speed/latency filters still fail closed when configured.
+            if (SELECT_PROFILE != 'throughput' or (latency_ok and (MIN_DOWNLOAD_MBPS <= 0 or throughput_ok))):
+                failure_candidates.append(ip)
+            if SELECT_PROFILE != 'throughput' or (throughput_ok and latency_ok):
+                usable_candidates.append(ip)
     previous = previous if isinstance(previous, dict) else {}
     old_failure_map = previous.get("failure_counts", {})
     old_failure_map = old_failure_map if isinstance(old_failure_map, dict) else {}
@@ -651,19 +792,24 @@ def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previ
     changed = False
     available = [ip for ip in usable_candidates if ip not in desired
                  and _safe_nonnegative(checks.get(ip, {}).get("total_ms"), 0) > 0]
-    available.sort(key=lambda ip: _safe_nonnegative(checks[ip].get("total_ms"), math.inf))
+    available.sort(key=(lambda ip: -checks[ip]['download_mbps']) if SELECT_PROFILE == 'throughput'
+                   else (lambda ip: _safe_nonnegative(checks[ip].get("total_ms"), math.inf)))
 
     # Failed slots are independent, bypass cooldown, and are retained only until
     # their own identity-bound counter reaches the threshold.
+    failure_available = [ip for ip in failure_candidates if ip not in desired
+                         and _safe_nonnegative(checks.get(ip, {}).get('total_ms'), 0) > 0]
+    failure_available.sort(key=lambda ip: (_float_or_none(checks[ip].get('total_ms')) or math.inf))
     failure_wait = []
     for failed_ip in confirmed_failed:
         count = failure_counts[failed_ip]
         if count < SWITCH_FAILURE_THRESHOLD:
             failure_wait.append(count)
             continue
-        if failed_ip in desired and available:
-            desired[desired.index(failed_ip)] = available.pop(0)
+        if failed_ip in desired and failure_available:
+            desired[desired.index(failed_ip)] = failure_available.pop(0)
             changed = True
+    available = [ip for ip in available if ip not in desired]
 
     # Fill empty slots independently of replacement benefit/cooldown or old
     # failures. Never use expansion as a reason to drop protected incumbents.
@@ -706,15 +852,31 @@ def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previ
     if last_switch and now - last_switch < SWITCH_MIN_INTERVAL:
         return desired, "cooldown", state, False
     replacements = []
-    healthy_slowest = sorted((ip for ip in healthy if ip in desired),
-                             key=lambda ip: _safe_nonnegative(checks[ip].get("total_ms"), 0), reverse=True)
-    for incumbent_ip, candidate_ip in zip(healthy_slowest, available):
-        incumbent_ms = _safe_nonnegative(checks[incumbent_ip].get("total_ms"), 0)
-        candidate_ms = _safe_nonnegative(checks[candidate_ip].get("total_ms"), 0)
-        improvement = (incumbent_ms - candidate_ms) / incumbent_ms if incumbent_ms else 0
-        # Even a configured zero threshold requires a strict actual improvement.
-        if candidate_ms < incumbent_ms and improvement >= SWITCH_MIN_IMPROVEMENT:
-            replacements.append((incumbent_ip, candidate_ip, improvement))
+    if SELECT_PROFILE == 'throughput':
+        # Missing incumbent throughput is uncertainty, not an invitation to use
+        # historical scan speed or silently revert to HTTPS latency.
+        measured_healthy = [ip for ip in healthy if checks[ip].get('download_recheck_ok') is True
+                            and (_float_or_none(checks[ip].get('download_mbps')) or 0) > 0]
+        if not measured_healthy:
+            return desired, 'download_recheck_uncertain_keep', state, False
+        healthy_slowest = sorted((ip for ip in measured_healthy if ip in desired),
+                                 key=lambda ip: checks[ip]['download_mbps'])
+        for incumbent_ip, candidate_ip in zip(healthy_slowest, available):
+            old_speed = checks[incumbent_ip]['download_mbps']
+            new_speed = checks[candidate_ip]['download_mbps']
+            improvement = (new_speed - old_speed) / old_speed
+            if new_speed > old_speed and improvement >= SWITCH_MIN_IMPROVEMENT:
+                replacements.append((incumbent_ip, candidate_ip, improvement))
+    else:
+        healthy_slowest = sorted((ip for ip in healthy if ip in desired),
+                                 key=lambda ip: _safe_nonnegative(checks[ip].get("total_ms"), 0), reverse=True)
+        for incumbent_ip, candidate_ip in zip(healthy_slowest, available):
+            incumbent_ms = _safe_nonnegative(checks[incumbent_ip].get("total_ms"), 0)
+            candidate_ms = _safe_nonnegative(checks[candidate_ip].get("total_ms"), 0)
+            improvement = (incumbent_ms - candidate_ms) / incumbent_ms if incumbent_ms else 0
+            # Even a configured zero threshold requires a strict actual improvement.
+            if candidate_ms < incumbent_ms and improvement >= SWITCH_MIN_IMPROVEMENT:
+                replacements.append((incumbent_ip, candidate_ip, improvement))
     if not replacements:
         return desired, "benefit_too_small", state, False
     for incumbent_ip, candidate_ip, _ in replacements:
@@ -758,6 +920,8 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied, probe_host=
 
     outcomes = []
     switch_state = load_switch_state() if probe_host else None
+    download_cache = {}
+    download_deadline = None
     for item in records:
         domain = item["domain"]
         reason = "policy_not_evaluated"
@@ -774,10 +938,30 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied, probe_host=
                 incumbent_ips = []
                 for rec in existing:
                     try:
-                        incumbent_ips.append(str(ipaddress.ip_address(rec.get("content", ""))))
+                        address = ipaddress.ip_address(rec.get("content", ""))
+                        if address.version == (4 if dns_type == 'A' else 6):
+                            incumbent_ips.append(str(address))
                     except ValueError:
                         continue
                 checks = recheck_ips(incumbent_ips + desired_ips, probe_host, probe_path)
+                if SELECT_PROFILE == 'throughput' and int(DOWNLOAD_TOP) > 0:
+                    if download_deadline is None:
+                        download_deadline = time.monotonic() + duration_seconds(SWITCH_DOWNLOAD_BUDGET)
+                    # HTTPS failures retain their identity-bound existing policy;
+                    # speed is evidence only after every HTTPS round succeeded.
+                    pairs = []
+                    for index in range(max(len(incumbent_ips), len(desired_ips))):
+                        if index < len(incumbent_ips):
+                            pairs.append(incumbent_ips[index])
+                        if index < len(desired_ips):
+                            pairs.append(desired_ips[index])
+                    fresh = [ip for ip in dict.fromkeys(pairs)
+                             if ip not in download_cache and checks.get(ip, {}).get('attempts', 0) > 0
+                             and checks[ip].get('successes') == checks[ip].get('attempts')]
+                    if fresh:
+                        download_cache.update(recheck_downloads(fresh, deadline=download_deadline))
+                    for ip in dict.fromkeys(incumbent_ips + desired_ips):
+                        checks.setdefault(ip, {}).update(download_cache.get(ip, {}))
                 previous = switch_state["entries"].get(_policy_key(domain, dns_type), {})
                 desired_for_domain, reason, pending_state, switched = decide_switch(
                     domain, dns_type, incumbent_ips, best, checks, previous)
@@ -832,7 +1016,8 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied, probe_host=
                 save_switch_state(next_state)
                 switch_state = next_state
             outcomes.append({"domain": domain, "status": "verified", "reason": reason,
-                             "switched": switched, "actual_ips": actual_ips})
+                             "switched": switched, "actual_ips": actual_ips,
+                             "download_checks": {ip: download_cache[ip] for ip in actual_ips if ip in download_cache}})
         except Exception as exc:
             log(f"[!] {domain} 的 {dns_type} 同步/回读失败 ({type(exc).__name__})，可能已部分写入；继续其他域名")
             outcomes.append({"domain": domain, "status": "failed",
@@ -960,6 +1145,9 @@ def sample_candidates(rows, mode, host, path):
     if configured < 0:
         raise ValueError('invalid DOWNLOAD_TOP')
     rows = apply_result_filters(rows, skip_loss=MAX_LOSS_RATE < 1, skip_speed=True)
+    if SELECT_PROFILE == 'throughput':
+        rows = diverse_candidates(rows)
+    goal = max(MIN_DOWNLOAD_MBPS, DOWNLOAD_QUALIFY_MBPS) if SELECT_PROFILE == 'throughput' else MIN_DOWNLOAD_MBPS
     limit = min(len(rows), 50, max(configured, TOP_N * 2)) if configured else 0
     rows = rows[:limit if configured else min(50, TOP_N * 2)]
     window = duration_seconds(DOWNLOAD_WINDOW)
@@ -1014,7 +1202,7 @@ def sample_candidates(rows, mode, host, path):
             eligible = apply_result_filters(eligible)
         if eligible:
             sampled.append(row)
-            if result['download_ok']:
+            if result['download_ok'] and (_float_or_none(result.get('download_mbps')) or 0) >= goal:
                 qualified_count += 1
     if time.monotonic() >= deadline:
         budget_expired = True
@@ -1026,9 +1214,10 @@ def sample_candidates(rows, mode, host, path):
     selected = sampled[:TOP_N]
     if attempts and not successes:
         log(f'[!] IPv{mode} download all failed: ' + ', '.join(f'{k}={v}' for k, v in sorted(errors.items())))
-    log(f'[*] IPv{mode} download complete: attempts={attempts}/{limit} success={successes} qualified={qualified_count} budget_expired={budget_expired}')
+    log(f'[*] IPv{mode} download complete: attempts={attempts}/{limit} success={successes} qualified={qualified_count} goal={goal:g}Mbps budget_expired={budget_expired}')
     return selected, {'download_target_count': limit, 'download_attempt_count': attempts,
                       'download_success_count': successes, 'download_qualified_count': qualified_count,
+                      'download_qualify_mbps': goal,
                       'download_budget_expired': budget_expired, 'download_errors': dict(errors)}
 
 
@@ -1054,7 +1243,8 @@ def run_mode(mode, cfg, mcis_bin):
     if configured_download_top < 0:
         raise ValueError("无效 DOWNLOAD_TOP")
     download_top = min(50, max(configured_download_top, TOP_N * 2)) if configured_download_top else 0
-    candidate_top = min(10000, max(TOP_TEST, TOP_N, download_top))
+    candidate_top = (max(50, min(1000, CANDIDATE_POOL)) if SELECT_PROFILE == 'throughput'
+                     else min(10000, max(TOP_TEST, TOP_N, download_top)))
 
     args = [
         str(mcis_bin),
@@ -1077,9 +1267,7 @@ def run_mode(mode, cfg, mcis_bin):
     log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
     log(f"[*] 探测 Host/Path: {host}{probe_path}")
     log(f"[*] 请求数量 {TOP_N}，候选池上限 {candidate_top}，下载候选目标 {download_top}（用户配置 {configured_download_top}）；目标非成功保证，受扫描结果/超时/过滤约束")
-    scan_meta = run_mcis(args, result_file, mode, MAX_SCAN_SECONDS or None)
-    sort_mode, best = parse_json_lines(result_file)
-    best = [row for row in best if ipaddress.ip_address(row["ip"]).version == int(mode)]
+    best, scan_meta = scan_candidates(args, result_file, mode, cidr_file)
     candidate_count = len(best)
     best, download_counts = sample_candidates(best, mode, host, probe_path)
     sort_mode = 'download_mbps' if any(r.get('download_ok') for r in best) else 'score_ms'
@@ -1129,9 +1317,13 @@ def run_mode(mode, cfg, mcis_bin):
         for outcome in domains:
             for ip in outcome.get("actual_ips", []):
                 if ip not in seen_ips:
-                    synced.append(by_ip.get(ip, {"ip": ip, "ok": True}))
+                    row = dict(by_ip.get(ip, {"ip": ip, "ok": True}))
+                    row.update(outcome.get('download_checks', {}).get(ip, {}))
+                    synced.append(row)
                     seen_ips.add(ip)
         atomic_json_write(PROJECT_DIR / f"best_ips_v{mode}.json", {"mode": sort_mode, "result": synced})
+    counts['actual_dns_count'] = len({ip for outcome in domains if outcome.get('status') == 'verified'
+                                      for ip in outcome.get('actual_ips', [])})
     log(f"[*] IPv{mode} DNS 验证通过 {verified}/{len(domains)}，状态: {status}")
     return {"mode": mode, "status": status, **counts, "domains": domains}
 
@@ -1170,6 +1362,13 @@ def run_all_modes():
                             ("SWITCH_RECHECK_TIMEOUT", SWITCH_RECHECK_TIMEOUT)):
             if not math.isfinite(value) or value < 0 or (name == "MAX_LOSS_RATE" and value > 1):
                 raise ValueError(f"无效 {name}")
+        if SELECT_PROFILE not in ('throughput', 'latency'):
+            raise ValueError('invalid SELECT_PROFILE')
+        if (not math.isfinite(DOWNLOAD_QUALIFY_MBPS) or not 0 <= DOWNLOAD_QUALIFY_MBPS <= 1000000
+                or not 1 <= DOWNLOAD_RECHECK_ROUNDS <= 3
+                or not 1 <= DIVERSITY_PREFIX_V4 <= 32 or not 1 <= DIVERSITY_PREFIX_V6 <= 128
+                or not 1 <= duration_seconds(SWITCH_DOWNLOAD_BUDGET) <= 1800):
+            raise ValueError('invalid throughput bounds')
         if MAX_SCAN_SECONDS < 0:
             raise ValueError('invalid MAX_SCAN_SECONDS')
         duration_seconds(DOWNLOAD_WINDOW)

@@ -15,6 +15,12 @@ from test_runner import runner
 
 
 class OutcomeTests(unittest.TestCase):
+    def setUp(self):
+        # These cases exercise the retained HTTPS-latency compatibility policy.
+        profile = patch.object(runner, 'SELECT_PROFILE', 'latency')
+        profile.start()
+        self.addCleanup(profile.stop)
+
     def _tls_probe(self, response_parts, delays=()):
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)

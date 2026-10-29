@@ -141,6 +141,16 @@
               <summary>高级测速参数</summary>
               <div class="fields">
                 <div class="row-3">
+                  <div><label for="advProfile">优选目标</label><select id="advProfile"><option value="throughput" {{ADV_PROFILE_THROUGHPUT}}>下载吞吐优先（推荐）</option><option value="latency" {{ADV_PROFILE_LATENCY}}>HTTPS 延迟优先（兼容）</option></select></div>
+                  <div><label for="advCandidatePool">扫描候选池（50~1000）</label><input id="advCandidatePool" type="number" min="50" max="1000" value="{{ADV_CANDIDATE_POOL}}" /></div>
+                  <div><label for="advDownloadQualify">下载达标目标 Mbps</label><input id="advDownloadQualify" type="number" min="0" step="1" value="{{ADV_DOWNLOAD_QUALIFY}}" /></div>
+                </div>
+                <div class="row-2">
+                  <div><label for="advDownloadRecheckRounds">DNS 吞吐复测轮数（1~3）</label><input id="advDownloadRecheckRounds" type="number" min="1" max="3" value="{{ADV_DOWNLOAD_RECHECK_ROUNDS}}" /></div>
+                  <div><label for="advSwitchDownloadBudget">每族 DNS 吞吐复测预算</label><input id="advSwitchDownloadBudget" value="{{ADV_SWITCH_DOWNLOAD_BUDGET}}" placeholder="180s" /></div>
+                </div>
+                <div class="hint">吞吐模式分散网段/机房候选，再按下载达标数决定是否提前停止；“达标目标”不是硬性过滤线，耗尽尝试或预算仍可保留低于目标的有效成绩。要拒绝低速候选请设置“最低下载 Mbps”。DNS 性能替换使用新旧 IP 同轮重复下载的中位数，不拿历史速度比较；复测缺失时保留旧记录。</div>
+                <div class="row-3">
                   <div><label for="advTimeout">单次超时</label><input id="advTimeout" value="{{ADV_TIMEOUT}}" placeholder="6s" /></div>
                   <div><label for="advRounds">测速轮次</label><input id="advRounds" type="number" min="1" value="{{ADV_ROUNDS}}" /></div>
                   <div><label for="advDownloadTop">下载候选尝试数（0 关闭）</label><input id="advDownloadTop" type="number" min="0" value="{{ADV_DOWNLOAD_TOP}}" /></div>
@@ -174,7 +184,7 @@
                   <div><label for="advRecheckRounds">同轮直连复测次数</label><input id="advRecheckRounds" type="number" min="1" max="20" value="{{ADV_SWITCH_RECHECK_ROUNDS}}" /></div>
                   <div><label for="advRecheckTimeout">每次直连复测总超时（秒）</label><input id="advRecheckTimeout" type="number" min="0.1" max="60" step="0.1" value="{{ADV_SWITCH_RECHECK_TIMEOUT}}" /></div>
                 </div>
-                <div class="hint"><strong>建议：</strong>切换只比较本轮对现有 IP 和候选 IP 的相同 HTTPS 直连总耗时（TLS 证书和 Host 均验证），默认至少改善 20%、间隔 6 小时；现有 IP 连续 2 轮全部失败才故障切换。mcis JSONL 没有每 IP 丢包率，启用丢包过滤时使用重复 HTTPS 失败率，不会把网段计数冒充丢包。legacy latency_ms 明确定义为 total_ms 优先、再回退 ttfb/connect。</div>
+                <div class="hint"><strong>建议：</strong>吞吐优先比较同轮新旧 IP 下载中位数，延迟优先比较 HTTPS 总耗时；默认至少改善 20%、间隔 6 小时。两种模式均要求 HTTPS 完整复验；现有 IP 连续 2 轮全部失败才故障切换。mcis JSONL 没有每 IP 丢包率，启用失败率过滤时使用重复 HTTPS 复测，不把网段计数冒充丢包。</div>
               </div>
             </details>
             <div class="toolbar">
@@ -306,6 +316,11 @@ function collectConfig() {
     ttl: Number(document.getElementById('ttl').value || 60),
     proxied: document.getElementById('proxied').checked,
     advanced: {
+      select_profile: document.getElementById('advProfile').value,
+      candidate_pool: document.getElementById('advCandidatePool').value,
+      download_qualify_mbps: document.getElementById('advDownloadQualify').value,
+      download_recheck_rounds: document.getElementById('advDownloadRecheckRounds').value,
+      switch_download_budget: document.getElementById('advSwitchDownloadBudget').value.trim(),
       timeout: document.getElementById('advTimeout').value.trim(),
       rounds: document.getElementById('advRounds').value,
       download_top: document.getElementById('advDownloadTop').value,
@@ -339,6 +354,11 @@ function applyForm(form) {
   document.getElementById('ttl').value = form.ttl || 60;
   document.getElementById('proxied').checked = !!form.proxied;
   const adv = form.advanced || {};
+  document.getElementById('advProfile').value = adv.select_profile || 'throughput';
+  document.getElementById('advCandidatePool').value = adv.candidate_pool || '200';
+  document.getElementById('advDownloadQualify').value = adv.download_qualify_mbps ?? '10';
+  document.getElementById('advDownloadRecheckRounds').value = adv.download_recheck_rounds || '2';
+  document.getElementById('advSwitchDownloadBudget').value = adv.switch_download_budget || '180s';
   document.getElementById('advTimeout').value = adv.timeout || '6s';
   document.getElementById('advRounds').value = adv.rounds || '6';
   document.getElementById('advDownloadTop').value = adv.download_top || '8';
@@ -545,7 +565,7 @@ async function loadStatus() {
   const reasonText = reason => reasons[reason] || (String(reason || '').startsWith('incumbent_failure_wait_') ? `现有 IP 连续全失败次数尚未达到阈值（${String(reason).replace('incumbent_failure_wait_', '')}）` : (reason || ''));
   const describe = s => {
     const details = (s.results || []).flatMap(result => (result.domains || []).map(domain => `${domain.domain}: ${reasonText(domain.reason || domain.error)}${domain.policy_reason ? `（策略：${reasonText(domain.policy_reason)}）` : ''}`)).filter(Boolean);
-    const counts = (s.results || []).map(result => `IPv${result.mode || '?'} ${labels[result.status] || result.status}：候选 ${result.candidate_count ?? '--'}，下载有效 ${result.download_success_count ?? '--'}，选中 ${result.selected_count ?? '--'}${result.requested_count ? '/' + result.requested_count : ''}`).join('；');
+    const counts = (s.results || []).map(result => `IPv${result.mode || '?'} ${labels[result.status] || result.status}：候选 ${result.candidate_count ?? '--'}，网段 ${result.candidate_prefix_count ?? '--'} / 机房 ${result.candidate_colo_count ?? '--'}，下载有效 ${result.download_success_count ?? '--'} / 达标 ${result.download_qualified_count ?? '--'}，选中 ${result.selected_count ?? '--'}${result.requested_count ? '/' + result.requested_count : ''}，已同步 ${result.actual_dns_count ?? '--'}`).join('；');
     return `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status}${counts ? ' / ' + counts : ''}${details.length ? ' / ' + details.join('；') : ''}`;
   };
   document.getElementById('runSummary').textContent = (j.running ? '本轮运行中，以下为上轮完整摘要（非本轮结果）：' : '最近完整摘要：') + (j.last_summary ? describe(j.last_summary) : '暂无完整摘要');

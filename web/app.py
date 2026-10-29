@@ -67,6 +67,11 @@ DNS_CACHE = {
 DNS_CACHE_TTL = int(os.getenv("DNS_CACHE_TTL", "120"))
 RUN_SETTINGS_DEFAULTS = {"ip_mode": "both", "top_n": 5}
 ADVANCED_DEFAULTS = {
+    "select_profile": os.getenv("SELECT_PROFILE", "throughput"),
+    "candidate_pool": os.getenv("CANDIDATE_POOL", "200"),
+    "download_qualify_mbps": os.getenv("DOWNLOAD_QUALIFY_MBPS", "10"),
+    "download_recheck_rounds": os.getenv("DOWNLOAD_RECHECK_ROUNDS", "2"),
+    "switch_download_budget": os.getenv("SWITCH_DOWNLOAD_BUDGET", "180s"),
     "timeout": os.getenv("TIMEOUT", "6s"),
     "rounds": os.getenv("ROUNDS", "6"),
     "download_top": os.getenv("DOWNLOAD_TOP", "8"),
@@ -409,15 +414,16 @@ def validated_number(value, name, low, high, integer=False):
 def validate_advanced(advanced):
     for key, low, high in (("rounds", 1, 1000), ("download_top", 0, 10000),
                            ("switch_min_interval", 0, 31536000), ("switch_failure_threshold", 1, 20),
-                           ("switch_recheck_rounds", 1, 20), ("max_scan_seconds", 0, 3600)):
+                           ("switch_recheck_rounds", 1, 20), ("max_scan_seconds", 0, 3600),
+                           ("candidate_pool", 50, 1000), ("download_recheck_rounds", 1, 3)):
         validated_number(advanced[key], key, low, high, integer=True)
     for key in ("min_download_mbps", "max_latency_ms", "min_latency_ms", "max_loss_rate",
-                "switch_min_improvement", "switch_recheck_timeout"):
+                "switch_min_improvement", "switch_recheck_timeout", "download_qualify_mbps"):
         high = 1 if key in ("max_loss_rate", "switch_min_improvement") else (60 if key == "switch_recheck_timeout" else 1000000)
         validated_number(advanced[key], key, 0 if key != "switch_recheck_timeout" else 0.1, high)
     if float(advanced["max_latency_ms"]) and float(advanced["min_latency_ms"]) > float(advanced["max_latency_ms"]):
         raise ValueError("最小延迟不能大于最大延迟")
-    for key in ("timeout", "download_timeout", "download_window", "download_budget"):
+    for key in ("timeout", "download_timeout", "download_window", "download_budget", "switch_download_budget"):
         value = advanced[key]
         if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))+", value):
             raise ValueError(f"{key} 必须为正数时长，例如 6s 或 500ms")
@@ -427,10 +433,12 @@ def validate_advanced(advanced):
             raise ValueError(f"{key} 必须大于 0 且不超过 24h")
         if key == "download_window" and not 0.1 <= seconds <= 30:
             raise ValueError("下载采样窗口必须在 100ms~30s 范围内")
-        if key == "download_budget" and not 1 <= seconds <= 1800:
+        if key in ("download_budget", "switch_download_budget") and not 1 <= seconds <= 1800:
             raise ValueError("每族下载总预算必须在 1s~30m 范围内")
     if advanced["download_mode"] not in ("sequential", "all"):
         raise ValueError("无效下载模式")
+    if advanced["select_profile"] not in ("throughput", "latency"):
+        raise ValueError("无效优选目标")
 
 
 def validate_run_settings(body, defaults):
@@ -658,6 +666,12 @@ def render_index():
     tpl = load_html()
     mapping = {
         "CF_TOKEN": "",
+        "ADV_PROFILE_THROUGHPUT": "selected" if state["advanced"].get("select_profile", "throughput") == "throughput" else "",
+        "ADV_PROFILE_LATENCY": "selected" if state["advanced"].get("select_profile", "throughput") == "latency" else "",
+        "ADV_CANDIDATE_POOL": html.escape(state["advanced"].get("candidate_pool", "200")),
+        "ADV_DOWNLOAD_QUALIFY": html.escape(state["advanced"].get("download_qualify_mbps", "10")),
+        "ADV_DOWNLOAD_RECHECK_ROUNDS": html.escape(state["advanced"].get("download_recheck_rounds", "2")),
+        "ADV_SWITCH_DOWNLOAD_BUDGET": html.escape(state["advanced"].get("switch_download_budget", "180s")),
         "CF_RECORDS": html.escape(state["records_text"]),
         "CF_TTL": html.escape(state["ttl"]),
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
@@ -765,6 +779,11 @@ def apply_advanced_env(env):
     advanced = cfg.get("advanced", {}) if isinstance(cfg, dict) else {}
     mapping = {
         "timeout": "TIMEOUT",
+        "select_profile": "SELECT_PROFILE",
+        "candidate_pool": "CANDIDATE_POOL",
+        "download_qualify_mbps": "DOWNLOAD_QUALIFY_MBPS",
+        "download_recheck_rounds": "DOWNLOAD_RECHECK_ROUNDS",
+        "switch_download_budget": "SWITCH_DOWNLOAD_BUDGET",
         "rounds": "ROUNDS",
         "download_top": "DOWNLOAD_TOP",
         "download_timeout": "DOWNLOAD_TIMEOUT",

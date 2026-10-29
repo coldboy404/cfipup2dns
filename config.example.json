@@ -19,6 +19,11 @@
     "top_n": 5
   },
   "advanced": {
+    "select_profile": "throughput",
+    "candidate_pool": "200",
+    "download_qualify_mbps": "10",
+    "download_recheck_rounds": "2",
+    "switch_download_budget": "180s",
     "timeout": "6s",
     "rounds": "6",
     "download_top": "8",

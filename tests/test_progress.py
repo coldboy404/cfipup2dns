@@ -14,6 +14,11 @@ from test_selection import probe_result
 
 
 class ProgressTests(unittest.TestCase):
+    def setUp(self):
+        profile = patch.object(runner, 'SELECT_PROFILE', 'latency')
+        profile.start()
+        self.addCleanup(profile.stop)
+
     def test_duration_legacy_go_spellings(self):
         for value, expected in [('.5s', .5), ('1.s', 1), ('+1s', 1)]:
             self.assertEqual(runner.duration_seconds(value), expected)

@@ -10,6 +10,28 @@ from web import app
 
 
 class WebConfigTests(unittest.TestCase):
+    def test_throughput_settings_persist_render_and_reach_runner(self):
+        settings = {'select_profile': 'throughput', 'candidate_pool': '300',
+                    'download_qualify_mbps': '25', 'download_recheck_rounds': '3',
+                    'switch_download_budget': '120s'}
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(app, 'CONFIG_FILE', Path(tmp) / 'config.json'), \
+                mock.patch.object(app, 'CRON_FILE', Path(tmp) / 'cron'):
+            app.save_config_from_form({'records_text': 'cf.example.com', 'advanced': settings})
+            env = app.apply_advanced_env({})
+            for key, expected in settings.items():
+                self.assertEqual(env[key.upper()], expected)
+            page = app.render_index()
+            self.assertIn('value="throughput" selected', page)
+            self.assertIn('id="advCandidatePool" type="number" min="50" max="1000" value="300"', page)
+            self.assertNotIn('{{ADV_', page)
+        for key, value in [('select_profile', 'random'), ('candidate_pool', '49'),
+                           ('candidate_pool', '1001'), ('download_qualify_mbps', 'NaN'),
+                           ('download_recheck_rounds', '0'), ('download_recheck_rounds', '4'),
+                           ('switch_download_budget', '1801s')]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                app.validate_advanced(dict(app.ADVANCED_DEFAULTS, **{key: value}))
+
     def test_native_runner_and_log_paths_honor_environment(self):
         import os
         import runpy
@@ -188,6 +210,18 @@ loadStatus = async () => {};
   await reloadConfig();
   assert.equal(document.getElementById('ipMode').value, '6');
   assert.equal(document.getElementById('topN').value, 17);
+  assert.equal(document.getElementById('advProfile').value, 'throughput');
+  document.getElementById('advProfile').value = 'latency';
+  document.getElementById('advCandidatePool').value = '350';
+  document.getElementById('advDownloadQualify').value = '25';
+  document.getElementById('advDownloadRecheckRounds').value = '3';
+  document.getElementById('advSwitchDownloadBudget').value = '120s';
+  const config = collectConfig();
+  assert.equal(config.advanced.select_profile, 'latency');
+  assert.equal(config.advanced.candidate_pool, '350');
+  assert.equal(config.advanced.download_qualify_mbps, '25');
+  assert.equal(config.advanced.download_recheck_rounds, '3');
+  assert.equal(config.advanced.switch_download_budget, '120s');
   document.getElementById('ipMode').value = '4';
   document.getElementById('topN').value = '21';
   await saveRunSettings();

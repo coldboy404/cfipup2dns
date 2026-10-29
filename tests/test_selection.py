@@ -19,6 +19,11 @@ def probe_result(ok=True, speed=20):
 
 
 class SelectionTests(unittest.TestCase):
+    def setUp(self):
+        profile = patch.object(runner, 'SELECT_PROFILE', 'latency')
+        profile.start()
+        self.addCleanup(profile.stop)
+
     def test_five_to_ten_backfills_without_replacing_existing_members(self):
         old = [f'192.0.2.{i}' for i in range(1, 6)]
         candidates = [{'ip': f'192.0.2.{i}'} for i in range(1, 11)]

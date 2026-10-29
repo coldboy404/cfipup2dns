@@ -126,7 +126,9 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.request("POST", path, body)[0], 400)
 
     def test_run_settings_roundtrip_preserves_config_and_schedule(self):
-        tuning = {'download_window': '7s', 'download_budget': '90s', 'max_scan_seconds': '180'}
+        tuning = {'download_window': '7s', 'download_budget': '90s', 'max_scan_seconds': '180',
+                  'select_profile': 'throughput', 'candidate_pool': '300', 'download_qualify_mbps': '20',
+                  'download_recheck_rounds': '2', 'switch_download_budget': '120s'}
         status, _, body = self.request('POST', '/api/config', {'records_text': 'cf.example.com', 'advanced': tuning})
         self.assertEqual(status, 200)
         form = json.loads(self.request('GET', '/api/config')[2])['form']
