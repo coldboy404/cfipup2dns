@@ -54,5 +54,5 @@ RUN chmod +x cfip.sh docker/entrypoint.sh docker/up.sh docker/init-mcis.sh \
 EXPOSE 9527
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9527/api/health', timeout=3)" || exit 1
+  CMD python3 -c "import os, urllib.request; host=os.getenv('WEB_BIND_HOST', '0.0.0.0'); host='127.0.0.1' if host in ('', '0.0.0.0') else host; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://%s:%s/api/health' % (host, os.getenv('PORT', '9527')), timeout=3)" || exit 1
 ENTRYPOINT ["/opt/cfipup2dns/docker/entrypoint.sh"]

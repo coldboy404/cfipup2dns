@@ -147,7 +147,7 @@
                 </div>
                 <div class="row-3">
                   <div><label for="advDownloadTimeout">下载超时</label><input id="advDownloadTimeout" value="{{ADV_DOWNLOAD_TIMEOUT}}" placeholder="90s" /></div>
-                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>顺序测速（推荐）</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>并发测速（更快）</option></select><div class="mode-help">顺序测速：逐个测速更稳；并发测速：同时测速更快，但更吃带宽。</div></div>
+                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>按下载成功数（推荐）</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>固定候选数</option></select><div class="mode-help">mcis 两个模式均逐 IP 串行：sequential 持续测试直到达到下载成功数或候选耗尽；all 只测试固定候选数。有效下载候选目标至少为“优选数量 × 3”，并且不低于上方“下载测速数量”；0 关闭下载测速。它不等于写入 DNS 的优选数量。</div></div>
                   <div><label for="advMinDownload">最低下载 Mbps</label><input id="advMinDownload" type="number" min="0" step="0.1" value="{{ADV_MIN_DOWNLOAD_MBPS}}" /></div>
                 </div>
                 <div><label for="advDownloadUrl">下载测速 URL</label><input id="advDownloadUrl" value="{{ADV_DOWNLOAD_URL}}" placeholder="留空使用 mcis 默认" /></div>
@@ -186,20 +186,24 @@
             <div>
               <label for="ipMode">IP 模式</label>
               <select id="ipMode">
-                <option value="both">IPv4 / IPv6</option>
-                <option value="4">IPv4</option>
-                <option value="6">IPv6</option>
+                <option value="both" {{RUN_MODE_BOTH}}>IPv4 / IPv6</option>
+                <option value="4" {{RUN_MODE_4}}>IPv4</option>
+                <option value="6" {{RUN_MODE_6}}>IPv6</option>
               </select>
             </div>
             <div>
               <label for="topN">优选数量</label>
-              <input id="topN" type="number" min="1" value="5" />
+              <input id="topN" type="number" min="1" max="50" value="{{RUN_TOPN}}" />
             </div>
             <div>
               <label>&nbsp;</label>
               <button id="runButton" class="warn" onclick="runNow()">立即运行</button>
             </div>
           </div>
+          <div class="toolbar" style="margin:12px 0">
+            <button class="secondary" onclick="saveRunSettings()">保存运行设置</button>
+          </div>
+          <div class="hint">手动运行设置与定时计划相互独立；保存或立即运行会记住本区的 IP 模式和优选数量。优选数量为每个 IP 地址族的上限（1~50），双栈模式分别最多选取该数量的 IPv4 和 IPv6，不是下载测速数量。“仅测速”只影响本次运行，不持久化。</div>
           <div class="switch" style="margin-top:12px"><span>仅测速（本次不修改 DNS）</span><input id="scanOnly" type="checkbox" /></div>
           <div class="toolbar" style="margin:12px 0">
             <button id="stopButton" class="danger" onclick="stopNow()" disabled>停止当前任务</button>
@@ -221,6 +225,7 @@
         <div class="card">
           <h3>定时任务</h3>
           <div class="fields">
+            <div class="hint">定时计划使用本区独立设置，不读取手动运行设置。优选数量为每个 IP 地址族的上限。</div>
             <div class="switch">
               <span>启用计划任务</span>
               <input id="scheduleEnabled" type="checkbox" {{SCHEDULE_ENABLED_CHECKED}} />
@@ -318,6 +323,7 @@ function collectConfig() {
 }
 
 function applyForm(form) {
+  applyRunSettings(form.run_settings || {});
   const token = document.getElementById('token');
   token.value = form.token || '';
   token.placeholder = form.token_configured ? '已配置；留空表示保持不变' : '请输入 Cloudflare API Token';
@@ -342,6 +348,29 @@ function applyForm(form) {
   document.getElementById('advFailureThreshold').value = adv.switch_failure_threshold || '2';
   document.getElementById('advRecheckRounds').value = adv.switch_recheck_rounds || '3';
   document.getElementById('advRecheckTimeout').value = adv.switch_recheck_timeout || '5';
+}
+
+function applyRunSettings(settings) {
+  document.getElementById('ipMode').value = settings.ip_mode || 'both';
+  document.getElementById('topN').value = settings.top_n ?? 5;
+}
+
+function collectRunSettings() {
+  return {
+    ip_mode: document.getElementById('ipMode').value,
+    top_n: Number(document.getElementById('topN').value),
+  };
+}
+
+async function saveRunSettings() {
+  const r = await fetch('/api/run-settings', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(collectRunSettings()),
+  });
+  const j = await r.json();
+  if (!j.ok) return alert(j.error || '保存运行设置失败');
+  applyRunSettings(j.run_settings);
+  alert('运行设置已保存（不影响定时计划）');
 }
 
 function applySchedule(schedule) {
@@ -436,15 +465,15 @@ async function loadBestIps() {
 }
 
 async function runNow() {
-  const ip_mode = document.getElementById('ipMode').value;
-  const top_n = Number(document.getElementById('topN').value || 5);
+  const settings = collectRunSettings();
   const r = await fetch('/api/run', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ip_mode, top_n, scan_only: document.getElementById('scanOnly').checked})
+    body: JSON.stringify({...settings, scan_only: document.getElementById('scanOnly').checked})
   });
   const j = await r.json();
   if (!j.ok) alert(j.error || '已有任务在运行');
+  else applyRunSettings(j.run_settings);
   await loadStatus();
   setTimeout(() => { loadStatus(); loadBestIps(); }, 1000);
 }

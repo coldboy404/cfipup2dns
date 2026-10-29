@@ -1,0 +1,11 @@
+# Optional Linux-only networking: inherit the host's IPv4/IPv6 routes.
+# Requires Docker Compose >= 2.24.4 for !reset.
+# Usage: WEB_BIND_HOST=192.168.66.33 NETWORK_MODE=host bash docker/up.sh
+services:
+  cfipup2dns:
+    network_mode: host
+    ports: !reset []
+    environment:
+      PORT: ${PORT:-9527}
+      # Host networking has no Docker port isolation: default to loopback.
+      WEB_BIND_HOST: ${WEB_BIND_HOST:-127.0.0.1}

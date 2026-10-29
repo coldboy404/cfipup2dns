@@ -11,6 +11,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       PORT: 9527
+      WEB_BIND_HOST: ${WEB_BIND_HOST:-0.0.0.0}
       WEB_USERNAME: ${WEB_USERNAME:-}
       WEB_PASSWORD: ${WEB_PASSWORD:-}
       PROJECT_DIR: /data/project

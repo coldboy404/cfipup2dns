@@ -33,8 +33,17 @@ jobs:
             sh -n "$file"
           done
 
-      - name: Validate Compose file
-        run: docker compose config --quiet
+      - name: Validate Compose networking modes
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.host.yml config --format json > host-compose.json
+          python3 - <<'PY'
+          import json
+          service = json.load(open('host-compose.json'))['services']['cfipup2dns']
+          assert service['network_mode'] == 'host'
+          assert not service.get('ports')
+          assert service['environment']['WEB_BIND_HOST'] == '127.0.0.1'
+          PY
 
   smoke-test:
     needs: validate
@@ -63,6 +72,17 @@ jobs:
           curl -fsS -u ci:ci-smoke-only http://127.0.0.1:9527/api/config > /dev/null
           docker exec smoke test -x /data/project/montecarlo-ip-searcher
           test "$(docker exec smoke stat -c %a /data/project/config.json)" = 600
+      - name: Verify optional host networking and custom-port health check
+        run: |
+          docker run -d --name host-smoke --network host -e PORT=19527 -e WEB_BIND_HOST=127.0.0.1 cfipup2dns:smoke
+          trap 'docker logs host-smoke; docker rm -f host-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19527/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:19527/api/health
+          health_cmd=$(docker inspect host-smoke --format '{{index .Config.Healthcheck.Test 1}}')
+          docker exec host-smoke sh -c "$health_cmd"
 
   build-and-push:
     needs: [validate, smoke-test]

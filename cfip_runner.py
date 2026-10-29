@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import errno
 import fcntl
 import http.client
 import io
@@ -274,17 +275,20 @@ def parse_json_lines(path):
             if key in row:
                 value = _float_or_none(row[key])
                 row[key] = value if value is not None and value >= 0 else None
+        # A failed/partial download can still report bytes and positive Mbps.
+        # Only legacy rows with no status field may infer success from speed.
+        if "download_ok" in row:
+            row["download_ok"] = _result_bool(row["download_ok"])
+            if not row["download_ok"]:
+                row["download_mbps"] = None
         # Keep only the public result schema; arbitrary upstream fields may
         # contain non-finite JSON numbers or unexpectedly large nested objects.
-        row = {key: row[key] for key in ("ip", "ok", "latency_ms", "connect_ms", "tls_ms", "ttfb_ms", "total_ms", "download_mbps", "score_ms",
+        row = {key: row[key] for key in ("ip", "ok", "latency_ms", "connect_ms", "tls_ms", "ttfb_ms", "total_ms", "download_ok", "download_mbps", "score_ms",
                "loss_rate", "loss", "lossRate", "packet_loss", "packet_loss_rate",
                "sent", "sended", "requests", "received", "recv", "success",
                "colo", "cf_colo", "cfcolo", "location", "pop") if key in row}
 
-        row_ok = row.get("ok")
-        if isinstance(row_ok, str):
-            row_ok = row_ok.strip().lower() in ("1", "true", "yes", "ok")
-        row["ok"] = row_ok is True or (type(row_ok) in (int, float) and row_ok == 1)
+        row["ok"] = _result_bool(row.get("ok"))
         for key in ("colo", "cf_colo", "cfcolo", "location", "pop"):
             if key in row:
                 row[key] = row[key][:64] if isinstance(row[key], str) else ""
@@ -295,16 +299,24 @@ def parse_json_lines(path):
         r for r in uniq
         if r.get("ok") and float(r.get("download_mbps") or 0) > 0
     ]
-    if dl:
-        dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
-        return "download_mbps", dl
-
     scored = [
         r for r in uniq
         if r.get("ok") and float(r.get("score_ms") or 0) > 0
     ]
     scored.sort(key=lambda x: float(x.get("score_ms") or 0))
+    if dl:
+        dl.sort(key=lambda x: float(x.get("download_mbps") or 0), reverse=True)
+        downloaded = {row["ip"] for row in dl}
+        # Retain valid HTTP candidates for later filter/backfill. Missing or
+        # failed speed stays missing, so an enabled minimum speed rejects it.
+        return "download_mbps", dl + [row for row in scored if row["ip"] not in downloaded]
     return "score_ms", scored
+
+
+def _result_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "ok")
+    return value is True or (type(value) in (int, float) and value == 1)
 
 
 def _float_or_none(value):
@@ -572,7 +584,7 @@ def _safe_nonnegative(value, default=0):
 
 
 def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previous, now=None):
-    """Conservatively replace individual DNS slots using same-round probes."""
+    """Resize and replace DNS slots without deleting unverified incumbents."""
     now = time.time() if now is None else now
     incumbent_ips = list(dict.fromkeys(incumbent_ips))
     candidate_ips = list(dict.fromkeys(r["ip"] for r in candidate_rows if r.get("ip")))
@@ -613,7 +625,14 @@ def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previ
             uncertain.append(ip)
     state["failure_counts"] = failure_counts
 
-    desired = incumbent_ips[:TOP_N]
+    desired = list(incumbent_ips)
+    # Only healthy slots may be removed for a size reduction. Uncertain and
+    # failed incumbents retain their existing protection, even above TOP_N.
+    excess = max(0, len(desired) - TOP_N)
+    removable = [ip for ip in reversed(desired) if ip in healthy][:excess]
+    desired = [ip for ip in desired if ip not in removable]
+    shrunk = bool(removable)
+    shrink_deferred = len(desired) > TOP_N
     changed = False
     available = [ip for ip in usable_candidates if ip not in desired
                  and _safe_nonnegative(checks.get(ip, {}).get("total_ms"), 0) > 0]
@@ -631,8 +650,29 @@ def decide_switch(domain, dns_type, incumbent_ips, candidate_rows, checks, previ
             desired[desired.index(failed_ip)] = available.pop(0)
             changed = True
 
+    # Fill empty slots independently of replacement benefit/cooldown or old
+    # failures. Never use expansion as a reason to drop protected incumbents.
+    additions = available[:max(0, TOP_N - len(desired))]
+    desired.extend(additions)
+    if additions:
+        reason = "expanded_verified_candidates"
+        if changed:
+            reason += ";incumbent_failure_threshold"
+        return desired, reason, state, True
+    if shrunk:
+        reason = "shrunk_healthy_surplus"
+        if shrink_deferred:
+            reason += ";shrink_deferred_protected_incumbents"
+        if changed:
+            reason += ";incumbent_failure_threshold"
+        return desired, reason, state, True
     if changed:
-        return desired, "incumbent_failure_threshold", state, True
+        reason = "incumbent_failure_threshold"
+        if shrink_deferred:
+            reason += ";shrink_deferred_protected_incumbents"
+        return desired, reason, state, True
+    if shrink_deferred:
+        return desired, "shrink_deferred_protected_incumbents", state, False
     if failure_wait:
         return desired, f"incumbent_failure_wait_{max(failure_wait)}/{SWITCH_FAILURE_THRESHOLD}", state, False
     if any(failure_counts[ip] >= SWITCH_FAILURE_THRESHOLD for ip in confirmed_failed):
@@ -787,6 +827,21 @@ def update_dns_records(token, records, dns_type, best, ttl, proxied, probe_host=
     return outcomes
 
 
+def ipv6_network_available():
+    """Check local IPv6 route/source selection, without sending any packets.
+
+    Unknown errors are not evidence of missing IPv6; in particular an external
+    timeout must never suppress scanning. This runs in the runner's own netns.
+    """
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
+            sock.connect(("2606:4700:4700::1111", 443))
+        return True
+    except OSError as exc:
+        return exc.errno not in (errno.ENETUNREACH, errno.EADDRNOTAVAIL,
+                                 errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, errno.ENODEV)
+
+
 def run_mode(mode, cfg, mcis_bin):
     dns_type = "A" if mode == "4" else "AAAA"
     cidr_file = PROJECT_DIR / ("ipv4cidr.txt" if mode == "4" else "ipv6cidr.txt")
@@ -794,18 +849,28 @@ def run_mode(mode, cfg, mcis_bin):
         log(f"[!] 跳过 IPv{mode}: 缺少 {cidr_file}")
         return {"mode": mode, "status": "failed", "reason": "missing_cidr"}
 
+    if mode == "6" and not ipv6_network_available():
+        log(f"[!] IPv6 network_unavailable：本机无可用 IPv6 路由/源地址，跳过扫描，保留旧 DNS 和旧结果；请求 {TOP_N}，选中 0")
+        return {"mode": mode, "status": "network_unavailable",
+                "reason": "ipv6_no_local_route_kept_old", "requested_count": TOP_N, "selected_count": 0}
+
     result_file = PROJECT_DIR / f"scan_results_v{mode}.log"
     host = MCIS_HOST or PROBE_FALLBACK_HOST
     host, probe_path = _probe_target(host, MCIS_PATH)
     heads = HEADS_V6 if mode == "6" else HEADS_V4
     budget = BUDGET_V6 if mode == "6" else BUDGET
     concurrency = CONCURRENCY_V6 if mode == "6" else CONCURRENCY
+    configured_download_top = int(DOWNLOAD_TOP)
+    if configured_download_top < 0:
+        raise ValueError("无效 DOWNLOAD_TOP")
+    download_top = min(10000, max(configured_download_top, TOP_N * 3)) if configured_download_top else 0
+    candidate_top = min(10000, max(TOP_TEST, TOP_N, download_top))
 
     args = [
         str(mcis_bin),
         "-cidr-file", str(cidr_file),
         "-concurrency", concurrency,
-        "-top", str(max(TOP_TEST, TOP_N)),
+        "-top", str(candidate_top),
         "-out", "jsonl",
         "-v",
         "-budget", budget,
@@ -815,8 +880,10 @@ def run_mode(mode, cfg, mcis_bin):
         "-timeout", TIMEOUT,
         "-rounds", ROUNDS,
     ]
-    if int(DOWNLOAD_TOP) > 0:
-        args += ["-download-top", DOWNLOAD_TOP, "-download-timeout", DOWNLOAD_TIMEOUT]
+    # Explicit zero is required: mcis otherwise defaults to five downloads.
+    args += ["-download-top", str(download_top)]
+    if download_top > 0:
+        args += ["-download-timeout", DOWNLOAD_TIMEOUT]
         if DOWNLOAD_MODE in ("all", "sequential"):
             args += ["-download-mode", DOWNLOAD_MODE]
         if DOWNLOAD_URL:
@@ -827,6 +894,7 @@ def run_mode(mode, cfg, mcis_bin):
     log(f"[*] 开始优选 IPv{mode}")
     log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
     log(f"[*] 探测 Host/Path: {host}{probe_path}")
+    log(f"[*] 请求数量 {TOP_N}，候选池上限 {candidate_top}，下载候选目标 {download_top}（用户配置 {configured_download_top}）；目标非成功保证，受扫描结果/超时/过滤约束")
     with open(result_file, "w", encoding="utf-8") as out:
         try:
             subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)
@@ -837,25 +905,31 @@ def run_mode(mode, cfg, mcis_bin):
 
     sort_mode, best = parse_json_lines(result_file)
     best = [row for row in best if ipaddress.ip_address(row["ip"]).version == int(mode)]
+    candidate_count = len(best)
+    download_success_count = sum((_float_or_none(row.get("download_mbps")) or 0) > 0 for row in best)
     # Cheap mcis-derived filters run before bounded repeated HTTPS checks so a
     # valid candidate is not discarded merely because an earlier invalid row
     # occupied the recheck slice.
     best = apply_result_filters(best, skip_loss=MAX_LOSS_RATE < 1)
     best = add_per_ip_loss_rechecks(best, host, probe_path)
     best = apply_result_filters(best)[:TOP_N]
+    counts = {"requested_count": TOP_N, "candidate_count": candidate_count,
+              "download_target_count": download_top, "download_success_count": download_success_count,
+              "selected_count": len(best)}
+    log(f"[*] IPv{mode} 数量汇总：请求 {TOP_N}，有效候选 {candidate_count}，有有效下载速度 {download_success_count}，过滤后选中 {len(best)}")
     if not best:
         previous = load_previous_best(mode) if KEEP_LAST_ON_FAIL else []
         if previous:
             log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，已保留旧 DNS 记录和旧结果，共 {len(previous)} 条")
-            return {"mode": mode, "status": "kept_old", "selected_count": 0}
+            return {"mode": mode, "status": "kept_old", **counts}
         if KEEP_LAST_ON_FAIL:
             log(f"[!] IPv{mode} 本次没有找到符合条件的新 IP，未更新 DNS")
-            return {"mode": mode, "status": "no_results", "selected_count": 0}
+            return {"mode": mode, "status": "no_results", **counts}
         raise RuntimeError(f"IPv{mode} 没有找到可用 IP")
 
     zero_speed = sum(1 for row in best if float(row.get("download_mbps") or 0) <= 0)
     if zero_speed:
-        log(f"[!] IPv{mode} 有 {zero_speed} 个结果未测到下载速度，通常表示测速未成功，不一定代表 IP 不可用")
+        log(f"[!] IPv{mode} 有 {zero_speed} 个结果没有有效下载速度（未执行或未成功），不作为已测速结果，不一定代表 IP 不可用")
 
     missing_latency = sum(1 for row in best if not row.get("latency_ms"))
     if missing_latency:
@@ -864,7 +938,7 @@ def run_mode(mode, cfg, mcis_bin):
     if SCAN_ONLY:
         atomic_json_write(PROJECT_DIR / f"scan_only_v{mode}.json", {"mode": sort_mode, "result": best})
         log(f"[✓] IPv{mode} 仅测速完成，未调用 DNS API，未覆盖已同步结果")
-        return {"mode": mode, "status": "scan_only", "selected_count": len(best)}
+        return {"mode": mode, "status": "scan_only", **counts}
 
     token = str(cfg.get("cloudflare", {}).get("token", "") or "").strip()
     ttl = cfg.get("cloudflare", {}).get("ttl", 60)
@@ -889,7 +963,7 @@ def run_mode(mode, cfg, mcis_bin):
                     seen_ips.add(ip)
         atomic_json_write(PROJECT_DIR / f"best_ips_v{mode}.json", {"mode": sort_mode, "result": synced})
     log(f"[*] IPv{mode} DNS 验证通过 {verified}/{len(domains)}，状态: {status}")
-    return {"mode": mode, "status": status, "selected_count": len(best), "domains": domains}
+    return {"mode": mode, "status": status, **counts, "domains": domains}
 
 
 def atomic_json_write(path, data):
@@ -950,12 +1024,13 @@ def run_all_modes():
     statuses = {r["status"] for r in results}
     if statuses <= {"verified", "scan_only"}:
         status, code = ("scan_only" if SCAN_ONLY else "verified"), 0
-    elif statuses & {"failed", "partial_failure"}:
+    elif statuses & {"failed", "partial_failure", "network_unavailable"}:
         status, code = ("partial_failure" if statuses & {"verified", "scan_only", "partial_failure"} else "failed"), 1
     else:
         status, code = "no_new_results", 2
     summary = {"started_at": started, "ended_at": time.time(), "scan_only": SCAN_ONLY,
-               "status": status, "code": code, "results": results}
+               "status": status, "code": code, "results": results,
+               "requested_count": TOP_N, "selected_count": sum(r.get("selected_count", 0) for r in results)}
     history_path = PROJECT_DIR / "run_history.json"
     try:
         history = json.loads(history_path.read_text(encoding="utf-8"))
@@ -964,7 +1039,8 @@ def run_all_modes():
     except (OSError, ValueError):
         history = []
     atomic_json_write(history_path, (history + [summary])[-HISTORY_LIMIT:])
-    log(f"[*] 本次执行结束: {status}，退出码 {code}")
+    log(f"[*] 本次执行结束: {status}，退出码 {code}，每模式请求 {TOP_N}，总选中 {summary['selected_count']}；" +
+        "；".join(f"IPv{r.get('mode', '?')}={r['status']}({r.get('selected_count', 0)})" for r in results))
     return code
 
 

@@ -104,7 +104,7 @@ class OutcomeTests(unittest.TestCase):
         candidate = [{'ip': '2.2.2.2'}]
         checks = {'1.1.1.1': {'attempts': 3, 'successes': 3, 'total_ms': 100},
                   '2.2.2.2': {'attempts': 3, 'successes': 3, 'total_ms': 85}}
-        with patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', .20), patch.object(runner, 'SWITCH_MIN_INTERVAL', 100), patch.object(runner, 'SWITCH_FAILURE_THRESHOLD', 2):
+        with patch.object(runner, 'TOP_N', 1), patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', .20), patch.object(runner, 'SWITCH_MIN_INTERVAL', 100), patch.object(runner, 'SWITCH_FAILURE_THRESHOLD', 2):
             self.assertEqual(runner.decide_switch('a', 'A', ['1.1.1.1'], candidate, checks, {}, 100)[1], 'benefit_too_small')
             checks['2.2.2.2']['total_ms'] = 50
             self.assertEqual(runner.decide_switch('a', 'A', ['1.1.1.1'], candidate, checks, {'last_switch_at': 50}, 100)[1], 'cooldown')
@@ -140,7 +140,7 @@ class OutcomeTests(unittest.TestCase):
 
     def test_zero_improvement_does_not_replace_tie_and_malformed_metrics_keep(self):
         candidate = [{'ip': '2.2.2.2'}]
-        with patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', 0):
+        with patch.object(runner, 'TOP_N', 1), patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', 0):
             desired, reason, _, changed = runner.decide_switch('a', 'A', ['1.1.1.1'], candidate,
                 {'1.1.1.1': {'attempts': 3, 'successes': 3, 'total_ms': 50},
                  '2.2.2.2': {'attempts': 3, 'successes': 3, 'total_ms': 50}},
@@ -157,8 +157,9 @@ class OutcomeTests(unittest.TestCase):
         checks = {'1.1.1.1': {'attempts': 3, 'successes': 1, 'total_ms': 100},
                   '2.2.2.2': {'attempts': 3, 'successes': 3, 'total_ms': 50}}
         old = {'failure_counts': {'1.1.1.1': 1}}
-        _, reason, state, changed = runner.decide_switch('a', 'A', ['1.1.1.1'],
-            [{'ip': '2.2.2.2'}], checks, old, 100)
+        with patch.object(runner, 'TOP_N', 1):
+            _, reason, state, changed = runner.decide_switch('a', 'A', ['1.1.1.1'],
+                [{'ip': '2.2.2.2'}], checks, old, 100)
         self.assertEqual(reason, 'recheck_uncertain_keep')
         self.assertFalse(changed)
         self.assertEqual(state['failure_counts']['1.1.1.1'], 0)
@@ -265,7 +266,7 @@ class OutcomeTests(unittest.TestCase):
                 '2.2.2.2': {'attempts': 3, 'successes': 3, 'total_ms': 50},
             }
             with patch.object(runner, 'cf_request_all', side_effect=reads), patch.object(runner, 'cf_request'), \
-                    patch.object(runner, 'recheck_ips', return_value=checks), patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', .2):
+                    patch.object(runner, 'recheck_ips', return_value=checks), patch.object(runner, 'TOP_N', 1), patch.object(runner, 'SWITCH_MIN_IMPROVEMENT', .2):
                 result = runner.update_dns_records('x', [{'domain': 'a.example'}, {'domain': 'b.example'}], 'A', [{'ip': '2.2.2.2'}], 60, False, 'example.com')
             self.assertEqual([r['status'] for r in result], ['verified', 'failed'])
             state = runner.load_switch_state()['entries']

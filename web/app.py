@@ -33,6 +33,7 @@ LOG_KEEP_BYTES = int(os.getenv("LOG_KEEP_BYTES", str(512 * 1024)))
 LOG_API_TAIL_LINES = int(os.getenv("LOG_API_TAIL_LINES", "300"))
 LOG_MEMORY_MAX_BYTES = int(os.getenv("LOG_MEMORY_MAX_BYTES", "16000"))
 PORT = int(os.getenv("PORT", "9527"))
+WEB_BIND_HOST = os.getenv("WEB_BIND_HOST", "0.0.0.0")
 RUN_CMD = "/opt/cfipup2dns/cfip.sh"
 BEST_IP_FILES = {
     "4": PROJECT_DIR / "best_ips_v4.json",
@@ -41,6 +42,7 @@ BEST_IP_FILES = {
 
 # The reservation, process creation and cancellation share one lock.
 RUN_LOCK = threading.RLock()
+CONFIG_LOCK = threading.RLock()
 RUN_PROCESS = None
 RUN_THREAD = None
 MAX_REQUEST_BYTES = 64 * 1024
@@ -63,6 +65,7 @@ DNS_CACHE = {
     "error": None,
 }
 DNS_CACHE_TTL = int(os.getenv("DNS_CACHE_TTL", "120"))
+RUN_SETTINGS_DEFAULTS = {"ip_mode": "both", "top_n": 5}
 ADVANCED_DEFAULTS = {
     "timeout": os.getenv("TIMEOUT", "6s"),
     "rounds": os.getenv("ROUNDS", "6"),
@@ -351,6 +354,7 @@ def default_config():
             "records": [],
         },
         "advanced": dict(ADVANCED_DEFAULTS),
+        "run_settings": dict(RUN_SETTINGS_DEFAULTS),
     }
 
 
@@ -372,12 +376,14 @@ def form_state(cfg):
             if k in advanced:
                 advanced[k] = str(v)
     return {
-        "token": str(cloudflare.get("token", "") or ""),
+        "token": "",
+        "token_configured": bool(str(cloudflare.get("token", "") or "").strip()),
         "ttl": str(cloudflare.get("ttl", 60) or 60),
         "proxied": bool(cloudflare.get("proxied", False)),
         "records": records,
         "records_text": records_to_text(records),
         "advanced": advanced,
+        "run_settings": run_settings_state(cfg),
     }
 
 
@@ -418,7 +424,51 @@ def validate_advanced(advanced):
         raise ValueError("无效下载模式")
 
 
+def validate_run_settings(body, defaults):
+    ip_mode = body.get("ip_mode", defaults["ip_mode"])
+    if ip_mode not in ("4", "6", "both"):
+        raise ValueError("无效 IP 模式")
+    top_n = validated_number(body.get("top_n", defaults["top_n"]), "优选数量", 1, 50, integer=True)
+    return {"ip_mode": ip_mode, "top_n": top_n}
+
+
+def run_settings_state(cfg):
+    settings = cfg.get("run_settings") if isinstance(cfg, dict) else None
+    try:
+        return validate_run_settings(settings if isinstance(settings, dict) else {}, RUN_SETTINGS_DEFAULTS)
+    except ValueError:
+        return dict(RUN_SETTINGS_DEFAULTS)
+
+
+def write_config(cfg):
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".config-", dir=CONFIG_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(cfg, out, ensure_ascii=False, indent=2)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(name, CONFIG_FILE)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def save_run_settings(body):
+    with CONFIG_LOCK:
+        cfg = load_config()
+        settings = validate_run_settings(body, run_settings_state(cfg))
+        cfg["run_settings"] = settings
+        write_config(cfg)
+        return settings
+
+
 def save_config_from_form(body):
+    with CONFIG_LOCK:
+        return _save_config_from_form(body)
+
+
+def _save_config_from_form(body):
     current_cfg = load_config()
     current_token = str(current_cfg.get("cloudflare", {}).get("token", "") or "").strip()
     submitted_token = str(body.get("token", "") or "").strip()
@@ -441,23 +491,14 @@ def save_config_from_form(body):
         },
         "advanced": advanced,
     }
+    cfg["run_settings"] = run_settings_state(current_cfg)
     if records:
         cfg["cloudflare"]["domain"] = records[0]["domain"]
         cfg["cloudflare"]["zone_id"] = records[0].get("zone_id", "")
     else:
         cfg["cloudflare"]["domain"] = ""
         cfg["cloudflare"]["zone_id"] = ""
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=".config-", dir=CONFIG_FILE.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            json.dump(cfg, out, ensure_ascii=False, indent=2)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(name, CONFIG_FILE)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    write_config(cfg)
     DNS_CACHE.update({"items": [], "updated_at": None, "fetched_at": None, "error": None})
     return cfg
 
@@ -606,6 +647,10 @@ def render_index():
         "CF_RECORDS": html.escape(state["records_text"]),
         "CF_TTL": html.escape(state["ttl"]),
         "CF_PROXIED_CHECKED": "checked" if state["proxied"] else "",
+        "RUN_TOPN": str(state["run_settings"]["top_n"]),
+        "RUN_MODE_4": "selected" if state["run_settings"]["ip_mode"] == "4" else "",
+        "RUN_MODE_6": "selected" if state["run_settings"]["ip_mode"] == "6" else "",
+        "RUN_MODE_BOTH": "selected" if state["run_settings"]["ip_mode"] == "both" else "",
         "SCHEDULE_ENABLED_CHECKED": "checked" if cron_form["enabled"] else "",
         "SCHEDULE_REBOOT_CHECKED": "checked" if cron_form["reboot"] else "",
         "SCHEDULE_INTERVAL": str(cron_form["interval_hours"]),
@@ -970,11 +1015,11 @@ class Handler(BaseHTTPRequestHandler):
             payload["selected_ips_updated_at"] = selected["updated_at"]
             payload["dns_error"] = selected.get("error")
             return json_response(self, payload)
+        if path == "/api/run-settings":
+            return json_response(self, {"ok": True, "run_settings": run_settings_state(load_config())})
         if path == "/api/config":
             cfg = load_config()
             form = form_state(cfg)
-            form["token"] = ""
-            form["token_configured"] = bool(str(cfg.get("cloudflare", {}).get("token", "") or "").strip())
             return json_response(self, {"ok": True, "form": form})
         if path == "/api/schedule":
             raw = CRON_FILE.read_text(encoding="utf-8") if CRON_FILE.exists() else default_cron_text()
@@ -1023,12 +1068,13 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("advanced 必须是对象")
             if path == "/api/run" and not isinstance(body.get("scan_only", False), bool):
                 raise ValueError("scan_only 必须为布尔值")
-            if path in ("/api/run", "/api/schedule"):
+            if path in ("/api/run", "/api/run-settings"):
+                validate_run_settings(body, run_settings_state(load_config()))
+            if path == "/api/schedule":
                 if body.get("ip_mode", "both") not in ("4", "6", "both"):
                     raise ValueError("无效 IP 模式")
-                validated_number(body.get("top_n", 5 if path == "/api/run" else 3), "优选数量", 1, 50, integer=True)
-                if path == "/api/schedule":
-                    validated_number(body.get("interval_hours", 6), "计划间隔", 1, 24, integer=True)
+                validated_number(body.get("top_n", 3), "优选数量", 1, 50, integer=True)
+                validated_number(body.get("interval_hours", 6), "计划间隔", 1, 24, integer=True)
         except (ValueError, UnicodeError) as exc:
             return json_response(self, {"ok": False, "error": str(exc) or "无效 JSON 对象"}, 400)
 
@@ -1038,8 +1084,6 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return json_response(self, {"ok": False, "error": str(exc)}, 400)
             form = form_state(cfg)
-            form["token"] = ""
-            form["token_configured"] = bool(str(cfg.get("cloudflare", {}).get("token", "") or "").strip())
             return json_response(self, {"ok": True, "form": form})
 
         if path == "/api/schedule":
@@ -1058,13 +1102,22 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"ok": stopped, "running": LAST_RUN["running"],
                                         "cancelled": LAST_RUN["cancelled"]}, 200 if stopped else 409)
 
+        if path == "/api/run-settings":
+            settings = save_run_settings(body)
+            return json_response(self, {"ok": True, "run_settings": settings})
+
         if path == "/api/run":
-            env = os.environ.copy()
-            env["IP_MODE"] = str(body.get("ip_mode", "both"))
-            env["TOP_N"] = str(body.get("top_n", 5))
-            env["SCAN_ONLY"] = "true" if body.get("scan_only", False) else "false"
-            ok = trigger_run(env)
-            return json_response(self, {"ok": ok, "running": LAST_RUN["running"]}, 200 if ok else 409)
+            with RUN_LOCK:
+                if LAST_RUN["running"]:
+                    return json_response(self, {"ok": False, "running": True}, 409)
+                settings = save_run_settings(body)
+                env = os.environ.copy()
+                env["IP_MODE"] = settings["ip_mode"]
+                env["TOP_N"] = str(settings["top_n"])
+                env["SCAN_ONLY"] = "true" if body.get("scan_only", False) else "false"
+                ok = trigger_run(env)
+                return json_response(self, {"ok": ok, "running": LAST_RUN["running"],
+                                            "run_settings": settings}, 200 if ok else 409)
 
         if path == "/api/logs/clear":
             if LOG_FILE.exists():
@@ -1084,5 +1137,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     threading.Thread(target=schedule_loop, daemon=True).start()
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer((WEB_BIND_HOST, PORT), Handler)
     server.serve_forever()
