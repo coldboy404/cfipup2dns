@@ -10,6 +10,75 @@ from web import app
 
 
 class WebConfigTests(unittest.TestCase):
+    def test_native_runner_and_log_paths_honor_environment(self):
+        import os
+        import runpy
+        with mock.patch.dict(os.environ, {'RUN_CMD': '/native/bin/cfip-run',
+                             'INIT_LOG_FILE': '/native/logs/init.log',
+                             'BOOT_LOG_FILE': '/native/logs/boot.log'}):
+            state = runpy.run_path(app.__file__, run_name='native_path_test')
+        self.assertEqual(state['RUN_CMD'], '/native/bin/cfip-run')
+        self.assertEqual(str(state['INIT_LOG_FILE']), '/native/logs/init.log')
+        self.assertEqual(str(state['BOOT_LOG_FILE']), '/native/logs/boot.log')
+
+    def test_missing_schedule_is_not_displayed_as_enabled(self):
+        state = app.cron_state(app.default_cron_text())
+        self.assertFalse(state['enabled'])
+        self.assertFalse(state['reboot'])
+
+    def test_sampling_settings_validate_persist_render_and_reach_runner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / 'config.json'
+            with mock.patch.object(app, 'CONFIG_FILE', cfg), mock.patch.object(app, 'CRON_FILE', Path(tmp) / 'cron'):
+                saved = app.save_config_from_form({'records_text': 'cf.example.com', 'advanced': {
+                    'download_window': '8s', 'download_budget': '120s', 'max_scan_seconds': '240'}})
+                self.assertEqual(saved['advanced']['download_window'], '8s')
+                env = app.apply_advanced_env({})
+                self.assertEqual((env['DOWNLOAD_WINDOW'], env['DOWNLOAD_BUDGET'], env['MAX_SCAN_SECONDS']),
+                                 ('8s', '120s', '240'))
+                page = app.render_index()
+                self.assertIn('id="advDownloadWindow" value="8s"', page)
+                self.assertIn('id="advDownloadBudget" value="120s"', page)
+                self.assertNotIn('{{ADV_', page)
+
+    def test_sampling_limits_reject_unbounded_or_invalid_values(self):
+        for key, value in [('download_window', '0s'), ('download_window', '31s'),
+                           ('download_budget', '1801s'), ('download_budget', '1ms'),
+                           ('max_scan_seconds', '-1'), ('max_scan_seconds', '3601')]:
+            advanced = dict(app.ADVANCED_DEFAULTS, **{key: value})
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                app.validate_advanced(advanced)
+
+    def test_results_expose_per_family_time_without_dating_legacy_speed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / 'old.json'
+            new = Path(tmp) / 'new.json'
+            old.write_text(json.dumps({'result': [{'ip': '192.0.2.1', 'download_mbps': 123}]}))
+            new.write_text(json.dumps({'result': [{'ip': '2001:db8::1', 'download_ok': True,
+                          'download_mbps': 4, 'download_measured_at': 100, 'download_method': 'window'}]}))
+            with mock.patch.object(app, 'BEST_IP_FILES', {'4': old, '6': new}):
+                items = app._load_best_ips_from_file()['items']
+            self.assertIsNone(items[0]['download_measured_at'])
+            self.assertEqual(items[1]['download_measured_at'], 100)
+            self.assertEqual(items[0]['result_updated_at'], old.stat().st_mtime)
+            failed = app.normalize_ip_row('4', {'ip': '192.0.2.2', 'download_ok': False, 'download_mbps': 999})
+            self.assertIsNone(failed['download_mbps'])
+
+    @unittest.skipUnless(shutil.which('node'), 'JavaScript check requires node')
+    def test_browser_labels_legacy_speed_and_clears_empty_results(self):
+        script = app.load_html().split('<script>', 1)[1].split('</script>', 1)[0]
+        script = script.rsplit('\nreloadConfig();', 1)[0]
+        harness = "const assert = require('node:assert/strict'); const root = {}; global.document = {getElementById: () => root};\n"
+        assertions = r'''
+renderBestIps([{ip: '192.0.2.1', version: '4', download_mbps: 123}]);
+assert(root.innerHTML.includes('历史/未知时间，非本轮成绩'));
+renderBestIps([{ip: '192.0.2.1', version: '4', download_mbps: 999, download_ok: false}]);
+assert(!root.innerHTML.includes('下载 999'));
+renderBestIps([]); assert.equal(root.textContent, '暂无已同步 IP');
+'''
+        result = subprocess.run(['node'], input=harness + script + assertions, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_blank_token_preserves_existing_secret(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.json"

@@ -43,7 +43,7 @@ ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1
 
 WORKDIR /opt/cfipup2dns
-COPY config.example.json cfip.sh cfip_runner.py ./
+COPY config.example.json cfip.sh cfip_runner.py speed_probe.py ./
 COPY docker ./docker
 COPY web ./web
 COPY --from=mcis-builder /out/ ./bundled-mcis/

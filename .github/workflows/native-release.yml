@@ -1,0 +1,136 @@
+name: Build and publish native releases
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate installer and sandbox integration
+        run: |
+          bash -n install.sh uninstall.sh
+          sh -n install.sh uninstall.sh
+          python3 -m py_compile cfip_runner.py speed_probe.py web/app.py native/*.py
+          python3 -m unittest discover -s tests -v
+
+  build:
+    needs: validate
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Build static scanner from checksum-pinned source
+        env:
+          MCIS_REF: add8ab94463ec440d17d354c858be7346a52b95e
+          MCIS_SHA256: 353cdcc516f2fb576fc5a31d75e5e99789263873c5196e791580392ddb37d81c
+          GOARCH: ${{ matrix.arch }}
+          GOOS: linux
+          CGO_ENABLED: '0'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p upstream bundled
+          curl -fSL --connect-timeout 10 --max-time 180 --retry 2 "https://codeload.github.com/Leo-Mu/montecarlo-ip-searcher/tar.gz/$MCIS_REF" -o upstream.tar.gz
+          printf '%s  upstream.tar.gz\n' "$MCIS_SHA256" | sha256sum -c -
+          tar -xzf upstream.tar.gz --strip-components=1 -C upstream
+          (cd upstream && go build -trimpath -ldflags='-s -w' -o ../bundled/montecarlo-ip-searcher ./cmd/mcis)
+          printf '%s+source' "$MCIS_REF" > bundled/.mcis_version
+          cp upstream/ipv4cidr.txt upstream/ipv6cidr.txt bundled/
+          cp upstream/LICENSE bundled/LICENSE.mcis
+          python3 native/package.py --bundled bundled --arch "$GOARCH" --output dist
+          file bundled/montecarlo-ip-searcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.arch }}
+          path: dist/cfipup2dns-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  smoke:
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.arch }}
+          path: dist
+      - name: Actual systemd install, auth, update, preservation and uninstall
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 native/ci_smoke.py --assets "$PWD/dist"
+      - name: Service diagnostics on failure
+        if: failure()
+        run: sudo journalctl -u cfipup2dns.service --no-pager -n 150
+
+  checksums:
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: dist
+      - name: Produce canonical asset checksums
+        run: |
+          cd dist
+          test -f cfipup2dns-linux-amd64.tar.gz
+          test -f cfipup2dns-linux-arm64.tar.gz
+          sha256sum cfipup2dns-linux-amd64.tar.gz cfipup2dns-linux-arm64.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: checksums
+    # Manual runs only create artifacts, even if a tag was selected in the UI.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-assets
+          path: dist
+      - name: Publish verified native release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c SHA256SUMS
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            args=()
+            if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes "${args[@]}"
+          fi
+          gh release upload "$TAG" cfipup2dns-linux-amd64.tar.gz cfipup2dns-linux-arm64.tar.gz SHA256SUMS --clobber
+          gh release view "$TAG" --json tagName,assets,url

@@ -238,7 +238,7 @@ class OutcomeTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_scan_only_never_calls_dns_and_partial_keeps_old_file(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(runner, 'PROJECT_DIR', Path(tmp)), patch.object(runner.subprocess, 'run'), patch.object(runner, 'parse_json_lines', return_value=('score_ms', [{'ip': '1.1.1.1', 'score_ms': 12}])), patch.object(runner, 'cf_request') as request, patch.object(runner, 'update_dns_records') as sync:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(runner, 'PROJECT_DIR', Path(tmp)), patch.object(runner, 'run_mcis', return_value={'scan_timed_out': False}), patch.object(runner, 'DOWNLOAD_TOP', '0'), patch.object(runner, 'parse_json_lines', return_value=('score_ms', [{'ip': '1.1.1.1', 'score_ms': 12}])), patch.object(runner, 'cf_request') as request, patch.object(runner, 'update_dns_records') as sync:
             root = Path(tmp)
             (root / 'ipv4cidr.txt').write_text('fixture')
             old = root / 'best_ips_v4.json'

@@ -143,14 +143,19 @@
                 <div class="row-3">
                   <div><label for="advTimeout">单次超时</label><input id="advTimeout" value="{{ADV_TIMEOUT}}" placeholder="6s" /></div>
                   <div><label for="advRounds">测速轮次</label><input id="advRounds" type="number" min="1" value="{{ADV_ROUNDS}}" /></div>
-                  <div><label for="advDownloadTop">下载测速数量</label><input id="advDownloadTop" type="number" min="0" value="{{ADV_DOWNLOAD_TOP}}" /></div>
+                  <div><label for="advDownloadTop">下载候选尝试数（0 关闭）</label><input id="advDownloadTop" type="number" min="0" value="{{ADV_DOWNLOAD_TOP}}" /></div>
                 </div>
                 <div class="row-3">
-                  <div><label for="advDownloadTimeout">下载超时</label><input id="advDownloadTimeout" value="{{ADV_DOWNLOAD_TIMEOUT}}" placeholder="90s" /></div>
-                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>按下载成功数（推荐）</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>固定候选数</option></select><div class="mode-help">mcis 两个模式均逐 IP 串行：sequential 持续测试直到达到下载成功数或候选耗尽；all 只测试固定候选数。有效下载候选目标至少为“优选数量 × 3”，并且不低于上方“下载测速数量”；0 关闭下载测速。它不等于写入 DNS 的优选数量。</div></div>
+                  <div><label for="advDownloadTimeout">单 IP 下载总超时</label><input id="advDownloadTimeout" value="{{ADV_DOWNLOAD_TIMEOUT}}" placeholder="15s" /></div>
+                  <div><label for="advDownloadMode">下载模式</label><select id="advDownloadMode"><option value="sequential" {{ADV_DOWNLOAD_MODE_SEQ}}>按下载成功数（达标即停）</option><option value="all" {{ADV_DOWNLOAD_MODE_ALL}}>固定候选数（预算内）</option></select><div class="mode-help">两个模式均逐 IP 串行，避免抢占带宽。sequential 达到本族优选数量的合格采样后停止；all 测试预算内候选。尝试上限至少为优选数量 × 2，最多 50；0 关闭。正常采样窗口到期可算成绩，不必下载完整文件；异常断流、超时不算成功。旧版 90s 超时会按采样窗口加连接余量自动收紧。</div></div>
                   <div><label for="advMinDownload">最低下载 Mbps</label><input id="advMinDownload" type="number" min="0" step="0.1" value="{{ADV_MIN_DOWNLOAD_MBPS}}" /></div>
                 </div>
-                <div><label for="advDownloadUrl">下载测速 URL</label><input id="advDownloadUrl" value="{{ADV_DOWNLOAD_URL}}" placeholder="留空使用 mcis 默认" /></div>
+                <div class="row-3">
+                  <div><label for="advDownloadWindow">下载采样窗口</label><input id="advDownloadWindow" value="{{ADV_DOWNLOAD_WINDOW}}" placeholder="6s" /></div>
+                  <div><label for="advDownloadBudget">每族下载总预算</label><input id="advDownloadBudget" value="{{ADV_DOWNLOAD_BUDGET}}" placeholder="180s" /></div>
+                  <div><label for="advMaxScan">每族扫描上限（秒，0 不限）</label><input id="advMaxScan" type="number" min="0" max="3600" value="{{ADV_MAX_SCAN_SECONDS}}" /></div>
+                </div>
+                <div><label for="advDownloadUrl">下载测速 URL</label><input id="advDownloadUrl" value="{{ADV_DOWNLOAD_URL}}" placeholder="留空使用 https://speed.cloudflare.com/__down" /></div>
                 <div class="row-3">
                   <div><label for="advMaxLatency">最大延迟 ms</label><input id="advMaxLatency" type="number" min="0" value="{{ADV_MAX_LATENCY_MS}}" /></div>
                   <div><label for="advMinLatency">最小延迟 ms</label><input id="advMinLatency" type="number" min="0" value="{{ADV_MIN_LATENCY_MS}}" /></div>
@@ -305,6 +310,9 @@ function collectConfig() {
       rounds: document.getElementById('advRounds').value,
       download_top: document.getElementById('advDownloadTop').value,
       download_timeout: document.getElementById('advDownloadTimeout').value.trim(),
+      download_window: document.getElementById('advDownloadWindow').value.trim(),
+      download_budget: document.getElementById('advDownloadBudget').value.trim(),
+      max_scan_seconds: document.getElementById('advMaxScan').value,
       download_mode: document.getElementById('advDownloadMode').value,
       download_url: document.getElementById('advDownloadUrl').value.trim(),
       min_download_mbps: document.getElementById('advMinDownload').value,
@@ -334,7 +342,10 @@ function applyForm(form) {
   document.getElementById('advTimeout').value = adv.timeout || '6s';
   document.getElementById('advRounds').value = adv.rounds || '6';
   document.getElementById('advDownloadTop').value = adv.download_top || '8';
-  document.getElementById('advDownloadTimeout').value = adv.download_timeout || '90s';
+  document.getElementById('advDownloadTimeout').value = adv.download_timeout || '15s';
+  document.getElementById('advDownloadWindow').value = adv.download_window || '6s';
+  document.getElementById('advDownloadBudget').value = adv.download_budget || '180s';
+  document.getElementById('advMaxScan').value = adv.max_scan_seconds ?? '300';
   document.getElementById('advDownloadMode').value = adv.download_mode || 'sequential';
   document.getElementById('advDownloadUrl').value = adv.download_url || '';
   document.getElementById('advMinDownload').value = adv.min_download_mbps || '0';
@@ -434,15 +445,20 @@ function renderRunStateMeta(updatedAt, nextRunAt) {
 function renderBestIps(items) {
   const root = document.getElementById('bestIps');
   if (!items || !items.length) {
+    root.textContent = '暂无已同步 IP';
     return false;
   }
   root.innerHTML = items.map(item => {
-    const speed = Number(item.download_mbps || 0);
+    const speed = item.download_ok === false ? 0 : Number(item.download_mbps || 0);
+    const measuredAt = Number(item.download_measured_at || 0);
+    const speedAge = measuredAt ? `采样 ${formatDateTime(measuredAt)}${Date.now() / 1000 - measuredAt > 86400 ? '（历史）' : ''}` : '历史/未知时间，非本轮成绩';
     const latencyVal = Number(item.latency_ms);
     const hasLatency = Number.isFinite(latencyVal) && latencyVal > 0;
     const tags = [
       `<span class="tag">IPv${escapeHtml(item.version)}</span>`,
       speed > 0 ? `<span class="tag">下载 ${formatNumber(speed)} Mbps</span>` : `<span class="tag">下载未测出</span>`,
+      speed > 0 ? `<span class="tag">${escapeHtml(speedAge)}</span>` : '',
+      item.result_updated_at ? `<span class="tag">本族结果 ${formatDateTime(item.result_updated_at)}</span>` : '',
       item.total_ms != null ? `<span class="tag">总耗时 ${formatNumber(item.total_ms)} ms</span>` : (hasLatency ? `<span class="tag">兼容延迟 ${formatNumber(latencyVal)} ms</span>` : `<span class="tag">总耗时未测出</span>`),
       item.connect_ms != null ? `<span class="tag">连接 ${formatNumber(item.connect_ms)} ms</span>` : '',
       item.tls_ms != null ? `<span class="tag">TLS ${formatNumber(item.tls_ms)} ms</span>` : '',
@@ -524,23 +540,22 @@ async function loadStatus() {
   const state = j.running ? (j.cancelled ? '正在停止' : '运行中') : ((j.cancelled ? '已停止' : '空闲') + (j.code === null ? '' : ` / 退出码 ${j.code}`));
   document.getElementById('runState').innerHTML = `${state}<div class="status-meta" id="runStateMeta">优选 IP 时间：--<br>下次运行时间：--</div>`;
   renderRunStateMeta(j.selected_ips_updated_at, j.next_run_at);
-  const labels = {verified: 'DNS API 回读已验证', scan_only: '仅测速完成（未改 DNS）', no_new_results: '无新结果，保留现有 DNS', partial_failure: '部分失败，请检查域名明细', failed: '失败，可能已有部分写入', kept_old: '保留旧结果', no_results: '无候选'};
+  const labels = {verified: 'DNS API 回读已验证', scan_only: '仅测速完成（未改 DNS）', no_new_results: '无新结果，保留现有 DNS', partial_failure: '部分失败，请检查域名明细', failed: '失败，可能已有部分写入', kept_old: '保留旧结果', no_results: '无候选', network_unavailable: 'IPv6 本机路由不可用，保留旧记录'};
   const reasons = {bootstrap: '首次写入已验证候选', bootstrap_no_verified_candidate: '首次写入无完整成功候选', benefit_too_small: '改善不足，保留现有记录', cooldown: '处于正常切换冷却期', incumbent_still_best: '现有记录仍为最优或候选已重合', minimum_improvement_met: '逐槽改善达到阈值', incumbent_failure_threshold: '单个现有 IP 连续全失败，已故障替换', incumbent_failed_no_verified_candidate: '现有 IP 已确认失败但无完整成功候选', recheck_uncertain_keep: '复测不确定，保留现有记录', dns_sync_or_readback_failed: 'DNS 写入或 API 回读验证失败，可能已部分写入'};
   const reasonText = reason => reasons[reason] || (String(reason || '').startsWith('incumbent_failure_wait_') ? `现有 IP 连续全失败次数尚未达到阈值（${String(reason).replace('incumbent_failure_wait_', '')}）` : (reason || ''));
   const describe = s => {
     const details = (s.results || []).flatMap(result => (result.domains || []).map(domain => `${domain.domain}: ${reasonText(domain.reason || domain.error)}${domain.policy_reason ? `（策略：${reasonText(domain.policy_reason)}）` : ''}`)).filter(Boolean);
-    return `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status}${details.length ? ' / ' + details.join('；') : ''}`;
+    const counts = (s.results || []).map(result => `IPv${result.mode || '?'} ${labels[result.status] || result.status}：候选 ${result.candidate_count ?? '--'}，下载有效 ${result.download_success_count ?? '--'}，选中 ${result.selected_count ?? '--'}${result.requested_count ? '/' + result.requested_count : ''}`).join('；');
+    return `${formatDateTime(s.ended_at)} / ${labels[s.status] || s.status}${counts ? ' / ' + counts : ''}${details.length ? ' / ' + details.join('；') : ''}`;
   };
-  document.getElementById('runSummary').textContent = j.last_summary ? '最近完整摘要：' + describe(j.last_summary) : '暂无完整摘要';
+  document.getElementById('runSummary').textContent = (j.running ? '本轮运行中，以下为上轮完整摘要（非本轮结果）：' : '最近完整摘要：') + (j.last_summary ? describe(j.last_summary) : '暂无完整摘要');
   const history = await (await fetch('/api/history')).json();
   document.getElementById('runHistory').textContent = (history.history || []).slice().reverse().map(describe).join('\n');
   document.getElementById('runHistory').style.whiteSpace = 'pre-wrap';
   const scans = await (await fetch('/api/scan-results')).json();
   document.getElementById('scanResults').textContent = (scans.result || []).map(row => `${row.ip} / 下载 ${row.download_mbps ?? '--'} Mbps / 总耗时 ${row.total_ms ?? row.latency_ms ?? '--'} ms / 连接 ${row.connect_ms ?? '--'} / TLS ${row.tls_ms ?? '--'} / TTFB ${row.ttfb_ms ?? '--'} / 机房 ${row.colo ?? '--'}`).join('\n') || '暂无仅测速结果';
   document.getElementById('scanResults').style.whiteSpace = 'pre-wrap';
-  if (j.selected_ips && j.selected_ips.length) {
-    renderBestIps(j.selected_ips);
-  }
+  renderBestIps(j.selected_ips || []);
 }
 
 function bindLogEvents() {

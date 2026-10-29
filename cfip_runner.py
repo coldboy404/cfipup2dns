@@ -6,7 +6,11 @@ import io
 import ipaddress
 import json
 import math
+import re
+import selectors
 import tempfile
+from collections import Counter
+from speed_probe import sample_download, _target as download_target
 import os
 import shutil
 import socket
@@ -38,11 +42,13 @@ HEADS_V6 = os.getenv("HEADS_V6", "16")
 BUDGET_V6 = os.getenv("BUDGET_V6", "4000")
 CONCURRENCY_V6 = os.getenv("CONCURRENCY_V6", "100")
 DOWNLOAD_TOP = os.getenv("DOWNLOAD_TOP", "20")
-DOWNLOAD_TIMEOUT = os.getenv("DOWNLOAD_TIMEOUT", "45s")
+DOWNLOAD_TIMEOUT = os.getenv("DOWNLOAD_TIMEOUT", "15s")
+DOWNLOAD_WINDOW = os.getenv("DOWNLOAD_WINDOW", "6s")
+DOWNLOAD_BUDGET = os.getenv("DOWNLOAD_BUDGET", "180s")
 DOWNLOAD_MODE = os.getenv("DOWNLOAD_MODE", "sequential")
 DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "")
 DOWNLOAD_BYTES = os.getenv("DOWNLOAD_BYTES", "50000000")
-MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "0"))
+MAX_SCAN_SECONDS = int(os.getenv("MAX_SCAN_SECONDS", "300"))
 PROBE_FALLBACK_HOST = os.getenv("PROBE_FALLBACK_HOST", "example.com").strip() or "example.com"
 HTTP_RETRIES = int(os.getenv("HTTP_RETRIES", "4"))
 HTTP_RETRY_DELAY = float(os.getenv("HTTP_RETRY_DELAY", "1.5"))
@@ -136,16 +142,16 @@ def ensure_mcis():
     mcis_bin = PROJECT_DIR / "montecarlo-ip-searcher"
     version_file = PROJECT_DIR / ".mcis_version"
     if not mcis_bin.exists():
-        raise RuntimeError("mcis 未初始化，请先重建/重启容器完成预编译")
+        raise RuntimeError("mcis 未初始化，请重新运行安装/更新，或重建并重启容器")
     current_version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
     if MCIS_REF and current_version != f"{MCIS_REF}+source":
         log(f"[!] 当前 mcis 版本标记为: {current_version or 'unknown'}，目标: {MCIS_REF}+source")
     if not mcis_supports_flag(mcis_bin, "-download-mode"):
-        raise RuntimeError("当前 mcis 不支持 -download-mode，请先在容器初始化阶段完成正确编译")
+        raise RuntimeError("当前 mcis 不兼容，请更新原生安装包或容器以初始化内置版本")
     for name in ("ipv4cidr.txt", "ipv6cidr.txt"):
         p = PROJECT_DIR / name
         if not p.exists() or p.stat().st_size == 0:
-            raise RuntimeError(f"缺少内置 CIDR 文件: {p}，请重启容器完成初始化")
+            raise RuntimeError(f"缺少内置 CIDR 文件: {p}，请重新安装/更新或重启容器完成初始化")
     return mcis_bin
 
 
@@ -209,10 +215,16 @@ def normalize_records(cfg):
     return uniq
 
 
+_ZONE_CACHE = {}
+
+
 def resolve_zone_id(token, domain, manual_zone_id=""):
     manual_zone_id = str(manual_zone_id or "").strip()
     if manual_zone_id:
         return manual_zone_id
+    cache_key = (token, domain.lower())
+    if cache_key in _ZONE_CACHE:
+        return _ZONE_CACHE[cache_key]
     labels = [x for x in domain.split(".") if x]
     if len(labels) < 2:
         raise RuntimeError(f"域名格式不合法，无法自动识别 Zone ID: {domain}")
@@ -226,6 +238,9 @@ def resolve_zone_id(token, domain, manual_zone_id=""):
             zid = str(zone.get("id", "") or "").strip()
             zname = str(zone.get("name", "") or "").strip().lower()
             if zid and zname == zone_name.lower():
+                if len(_ZONE_CACHE) >= 200:
+                    _ZONE_CACHE.clear()
+                _ZONE_CACHE[cache_key] = zid
                 return zid
     raise RuntimeError(f"自动获取 Zone ID 失败: {domain}，请检查 Token 权限或域名是否在当前账号下")
 
@@ -241,7 +256,7 @@ def parse_json_lines(path):
                 obj = json.loads(line)
             except Exception:
                 continue
-            if obj.get("ip"):
+            if isinstance(obj, dict) and obj.get("ip"):
                 rows.append(obj)
 
     uniq = []
@@ -510,7 +525,7 @@ def row_colo(row):
     return ""
 
 
-def apply_result_filters(rows, skip_loss=False):
+def apply_result_filters(rows, skip_loss=False, skip_speed=False):
     allowed_colos = {x.strip().upper() for x in CF_COLO.split(",") if x.strip()}
     filtered = []
     stats = {"total": len(rows), "latency": 0, "loss": 0, "speed": 0, "colo": 0}
@@ -527,7 +542,7 @@ def apply_result_filters(rows, skip_loss=False):
             stats["loss"] += 1
             continue
         speed = _float_or_none(row.get("download_mbps")) or 0
-        if MIN_DOWNLOAD_MBPS > 0 and speed < MIN_DOWNLOAD_MBPS:
+        if not skip_speed and MIN_DOWNLOAD_MBPS > 0 and (speed < MIN_DOWNLOAD_MBPS or ("download_ok" in row and not row["download_ok"])):
             stats["speed"] += 1
             continue
         if allowed_colos:
@@ -842,6 +857,181 @@ def ipv6_network_available():
                                  errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, errno.ENODEV)
 
 
+def duration_seconds(value):
+    text = str(value).strip()
+    text = text[1:] if text.startswith('+') else text
+    parts = list(re.finditer(r'((?:\d+(?:\.\d*)?|\.\d+))(ns|us|µs|ms|s|m|h)?', text))
+    if not parts or ''.join(p.group(0) for p in parts) != text:
+        raise ValueError('invalid duration')
+    seconds = sum(float(p.group(1)) * {'ns': 1e-9, 'us': 1e-6, 'µs': 1e-6, 'ms': .001, 's': 1, 'm': 60, 'h': 3600, None: 1}[p.group(2)] for p in parts)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError('invalid duration')
+    return seconds
+
+
+def run_mcis(args, result_file, mode, timeout=None):
+    """Drain merged output without reader threads; preserve inherited PGID.
+
+    Tee raw output into the private JSONL file, but expose only sanitized
+    numeric progress on stdout: arbitrary child diagnostics may contain URLs
+    or secrets. No new session/group: the WebUI's group kill reaches MCIS too.
+    """
+    deadline = time.monotonic() + timeout if timeout else None
+    last_progress = 0.0
+    total = complete = 0
+    scanned = scan_budget = 0
+    pending = b''
+    timed_out = False
+    with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as out:
+        os.fchmod(out.fileno(), 0o600)
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(proc.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    if deadline is not None and time.monotonic() >= deadline:
+                        timed_out = True
+                        proc.kill()
+                        # Kill closes the writer, then preserve complete rows
+                        # already buffered before the deadline.
+                        proc.wait(timeout=5)
+                        os.set_blocking(proc.stdout.fileno(), False)
+                        drain_deadline = time.monotonic() + 1
+                        while time.monotonic() < drain_deadline:
+                            try:
+                                buffered = os.read(proc.stdout.fileno(), 65536)
+                            except BlockingIOError:
+                                break
+                            if not buffered:
+                                break
+                            out.write(buffered)
+                            total += len(buffered)
+                        out.flush()
+                        break
+                    for key, _ in selector.select(.1):
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        out.write(chunk)
+                        out.flush()
+                        total += len(chunk)
+                        pending += chunk
+                        # Bound the progress parser even for huge/no-newline output.
+                        lines = pending.replace(b'\r', b'\n').split(b'\n')
+                        pending = lines.pop()[-4096:]
+                        for line in lines:
+                            progress = re.match(rb'progress:\s*(\d+)/(\d+)\s+done', line)
+                            if progress:
+                                scanned, scan_budget = (int(value) for value in progress.groups())
+                            if len(line) <= 65536:
+                                try:
+                                    row = json.loads(line)
+                                    if isinstance(row, dict) and row.get('ip'):
+                                        complete += 1
+                                except (ValueError, UnicodeError):
+                                    pass
+                    if time.monotonic() - last_progress >= 1:
+                        log(f'[*] IPv{mode} 扫描进度 MCIS progress: {scanned}/{scan_budget} output_bytes={total}, completed_rows={complete}')
+                        last_progress = time.monotonic()
+                # A child may close stdout before exiting; deadline still applies.
+                left = max(.001, deadline - time.monotonic()) if deadline else None
+                try:
+                    code = proc.wait(timeout=left)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    proc.kill()
+                    code = proc.wait(timeout=5)
+            if timed_out:
+                log(f'[!] IPv{mode} MCIS deadline={timeout}s; 读取已完成 JSONL')
+            elif code:
+                raise RuntimeError(f'mcis 执行失败，IPv{mode}，退出码: {code}')
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            proc.stdout.close()
+    log(f'[*] IPv{mode} MCIS complete: output_bytes={total}, completed_rows={complete}, timeout={timed_out}')
+    return {'scan_timed_out': timed_out}
+
+
+def sample_candidates(rows, mode, host, path):
+    configured = int(DOWNLOAD_TOP)
+    if configured < 0:
+        raise ValueError('invalid DOWNLOAD_TOP')
+    rows = apply_result_filters(rows, skip_loss=MAX_LOSS_RATE < 1, skip_speed=True)
+    limit = min(len(rows), 50, max(configured, TOP_N * 2)) if configured else 0
+    rows = rows[:limit if configured else min(50, TOP_N * 2)]
+    window = duration_seconds(DOWNLOAD_WINDOW)
+    budget = duration_seconds(DOWNLOAD_BUDGET)
+    cap = min(duration_seconds(DOWNLOAD_TIMEOUT), window + 9)
+    max_bytes = int(DOWNLOAD_BYTES)
+    if not 1024 <= max_bytes <= 1000000000:
+        raise ValueError('invalid DOWNLOAD_BYTES')
+    download_target(DOWNLOAD_URL)  # Reject unsafe URLs before any network activity.
+    deadline = time.monotonic() + budget
+    attempts = successes = qualified_count = 0
+    errors = Counter()
+    sampled = []
+    fallback = []
+    budget_expired = False
+    log(f'[*] IPv{mode} download start: serial window={window:g}s budget={budget:g}s effective_timeout_cap={cap:g}s attempts<={limit} target={TOP_N}')
+    for index, original in enumerate(rows):
+        row = dict(original)
+        # Never reuse MCIS download metrics: built-in downloads are disabled.
+        for key in ('download_mbps', 'download_bytes', 'download_ms'):
+            row.pop(key, None)
+        row.update(download_ok=False, download_method='not_sampled', download_source='mcis_http',
+                   download_error='', download_stop_reason='not_sampled')
+        left = deadline - time.monotonic()
+        if left <= 0:
+            budget_expired = True
+        target_reached = DOWNLOAD_MODE == 'sequential' and qualified_count >= TOP_N
+        if attempts >= limit or budget_expired or target_reached:
+            row['download_stop_reason'] = ('disabled' if not configured else 'budget' if budget_expired
+                                           else 'target_reached' if target_reached else 'attempt_limit')
+            fallback.append(row)
+            continue
+        # Filter cheap non-speed requirements before spending a sample slot.
+        if not apply_result_filters([row], skip_loss=MAX_LOSS_RATE < 1, skip_speed=True):
+            continue
+        attempts += 1
+        log(f'[*] IPv{mode} download attempt={attempts}/{limit} ip={row["ip"]} budget_left={left:.1f}s')
+        measured_at = time.time()
+        result = sample_download(row['ip'], DOWNLOAD_URL, window_seconds=window,
+                                 timeout_seconds=min(cap, left), max_bytes=max_bytes)
+        row.update({k: v for k, v in result.items() if k.startswith('download_')})
+        row.update(download_method='windowed_http', download_source='direct_ip', download_measured_at=measured_at)
+        if result['download_ok']:
+            successes += 1
+        else:
+            errors[result.get('download_error') or 'unknown'] += 1
+        speed_text = f'{result["download_mbps"]:.2f} Mbps' if result.get('download_ok') and result.get('download_mbps') is not None else '无有效速度'
+        log(f'[*] IPv{mode} 下载进度 download progress: {attempts}/{limit} success={successes} ip={row["ip"]} speed={speed_text} bytes={result["download_bytes"]} stop={result["download_stop_reason"]}')
+        eligible = apply_result_filters([row], skip_loss=MAX_LOSS_RATE < 1)
+        if eligible:
+            eligible = add_per_ip_loss_rechecks(eligible, host, path)
+            eligible = apply_result_filters(eligible)
+        if eligible:
+            sampled.append(row)
+            if result['download_ok']:
+                qualified_count += 1
+    if time.monotonic() >= deadline:
+        budget_expired = True
+    sampled.sort(key=lambda r: (not r.get('download_ok'), -float(r.get('download_mbps') or 0), float(r.get('score_ms') or math.inf)))
+    remaining = apply_result_filters(fallback, skip_loss=MAX_LOSS_RATE < 1)
+    if len(sampled) < TOP_N:
+        remaining = add_per_ip_loss_rechecks(remaining, host, path)
+        sampled.extend(apply_result_filters(remaining))
+    selected = sampled[:TOP_N]
+    if attempts and not successes:
+        log(f'[!] IPv{mode} download all failed: ' + ', '.join(f'{k}={v}' for k, v in sorted(errors.items())))
+    log(f'[*] IPv{mode} download complete: attempts={attempts}/{limit} success={successes} qualified={qualified_count} budget_expired={budget_expired}')
+    return selected, {'download_target_count': limit, 'download_attempt_count': attempts,
+                      'download_success_count': successes, 'download_qualified_count': qualified_count,
+                      'download_budget_expired': budget_expired, 'download_errors': dict(errors)}
+
+
 def run_mode(mode, cfg, mcis_bin):
     dns_type = "A" if mode == "4" else "AAAA"
     cidr_file = PROJECT_DIR / ("ipv4cidr.txt" if mode == "4" else "ipv6cidr.txt")
@@ -863,7 +1053,7 @@ def run_mode(mode, cfg, mcis_bin):
     configured_download_top = int(DOWNLOAD_TOP)
     if configured_download_top < 0:
         raise ValueError("无效 DOWNLOAD_TOP")
-    download_top = min(10000, max(configured_download_top, TOP_N * 3)) if configured_download_top else 0
+    download_top = min(50, max(configured_download_top, TOP_N * 2)) if configured_download_top else 0
     candidate_top = min(10000, max(TOP_TEST, TOP_N, download_top))
 
     args = [
@@ -881,41 +1071,21 @@ def run_mode(mode, cfg, mcis_bin):
         "-rounds", ROUNDS,
     ]
     # Explicit zero is required: mcis otherwise defaults to five downloads.
-    args += ["-download-top", str(download_top)]
-    if download_top > 0:
-        args += ["-download-timeout", DOWNLOAD_TIMEOUT]
-        if DOWNLOAD_MODE in ("all", "sequential"):
-            args += ["-download-mode", DOWNLOAD_MODE]
-        if DOWNLOAD_URL:
-            args += ["-download-url", DOWNLOAD_URL]
-        if DOWNLOAD_BYTES:
-            args += ["-download-bytes", DOWNLOAD_BYTES]
+    args += ["-download-top", "0"]
 
     log(f"[*] 开始优选 IPv{mode}")
     log(f"[*] 并发: {concurrency}，轮次: {ROUNDS}，预算: {budget}，搜索头: {heads}，测速模式: {DOWNLOAD_MODE}")
     log(f"[*] 探测 Host/Path: {host}{probe_path}")
     log(f"[*] 请求数量 {TOP_N}，候选池上限 {candidate_top}，下载候选目标 {download_top}（用户配置 {configured_download_top}）；目标非成功保证，受扫描结果/超时/过滤约束")
-    with open(result_file, "w", encoding="utf-8") as out:
-        try:
-            subprocess.run(args, stdout=out, stderr=subprocess.STDOUT, check=True, timeout=MAX_SCAN_SECONDS or None)
-        except subprocess.TimeoutExpired:
-            log(f"[!] 扫描超时，已按 {MAX_SCAN_SECONDS}s 截止，继续读取已有结果")
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"mcis 执行失败，IPv{mode}，退出码: {e.returncode}")
-
+    scan_meta = run_mcis(args, result_file, mode, MAX_SCAN_SECONDS or None)
     sort_mode, best = parse_json_lines(result_file)
     best = [row for row in best if ipaddress.ip_address(row["ip"]).version == int(mode)]
     candidate_count = len(best)
-    download_success_count = sum((_float_or_none(row.get("download_mbps")) or 0) > 0 for row in best)
-    # Cheap mcis-derived filters run before bounded repeated HTTPS checks so a
-    # valid candidate is not discarded merely because an earlier invalid row
-    # occupied the recheck slice.
-    best = apply_result_filters(best, skip_loss=MAX_LOSS_RATE < 1)
-    best = add_per_ip_loss_rechecks(best, host, probe_path)
-    best = apply_result_filters(best)[:TOP_N]
+    best, download_counts = sample_candidates(best, mode, host, probe_path)
+    sort_mode = 'download_mbps' if any(r.get('download_ok') for r in best) else 'score_ms'
     counts = {"requested_count": TOP_N, "candidate_count": candidate_count,
-              "download_target_count": download_top, "download_success_count": download_success_count,
-              "selected_count": len(best)}
+              **download_counts, **scan_meta, "selected_count": len(best)}
+    download_success_count = download_counts['download_success_count']
     log(f"[*] IPv{mode} 数量汇总：请求 {TOP_N}，有效候选 {candidate_count}，有有效下载速度 {download_success_count}，过滤后选中 {len(best)}")
     if not best:
         previous = load_previous_best(mode) if KEEP_LAST_ON_FAIL else []
@@ -1000,6 +1170,11 @@ def run_all_modes():
                             ("SWITCH_RECHECK_TIMEOUT", SWITCH_RECHECK_TIMEOUT)):
             if not math.isfinite(value) or value < 0 or (name == "MAX_LOSS_RATE" and value > 1):
                 raise ValueError(f"无效 {name}")
+        if MAX_SCAN_SECONDS < 0:
+            raise ValueError('invalid MAX_SCAN_SECONDS')
+        duration_seconds(DOWNLOAD_WINDOW)
+        duration_seconds(DOWNLOAD_BUDGET)
+        duration_seconds(DOWNLOAD_TIMEOUT)
         if MAX_LATENCY_MS and MIN_LATENCY_MS > MAX_LATENCY_MS:
             raise ValueError("最小延迟不能大于最大延迟")
         if (SWITCH_MIN_IMPROVEMENT > 1 or SWITCH_MIN_INTERVAL < 0 or SWITCH_FAILURE_THRESHOLD < 1

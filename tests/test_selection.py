@@ -13,6 +13,11 @@ def good(ms=100):
     return {'attempts': 3, 'successes': 3, 'total_ms': ms}
 
 
+def probe_result(ok=True, speed=20):
+    return dict(download_ok=ok, download_mbps=speed if ok else None, download_bytes=4096,
+                download_ms=100, download_error='' if ok else 'timeout', download_stop_reason='window' if ok else 'timeout')
+
+
 class SelectionTests(unittest.TestCase):
     def test_five_to_ten_backfills_without_replacing_existing_members(self):
         old = [f'192.0.2.{i}' for i in range(1, 6)]
@@ -88,17 +93,17 @@ class SelectionTests(unittest.TestCase):
             self.assertNotIn('download_mbps', filtered[0])
 
     def test_download_candidate_target_and_explicit_disable(self):
-        for configured, expected in [('5', 30), ('40', 40), ('0', 0), ('20000', 10000)]:
+        for configured, expected in [('5', 20), ('40', 40), ('0', 0), ('20000', 50)]:
             with self.subTest(configured=configured), tempfile.TemporaryDirectory() as tmp, \
                     patch.object(runner, 'PROJECT_DIR', Path(tmp)), patch.object(runner, 'TOP_N', 10), \
                     patch.object(runner, 'TOP_TEST', 5), patch.object(runner, 'DOWNLOAD_TOP', configured), \
-                    patch.object(runner, 'SCAN_ONLY', True), patch.object(runner.subprocess, 'run') as run, \
+                    patch.object(runner, 'SCAN_ONLY', True), patch.object(runner, 'run_mcis', return_value={}) as run, \
                     patch.object(runner, 'parse_json_lines', return_value=('score_ms', [])):
                 (Path(tmp) / 'ipv4cidr.txt').write_text('fixture')
                 runner.run_mode('4', {}, 'fake')
                 args = run.call_args.args[0]
                 self.assertIn('-download-top', args)
-                self.assertEqual(int(args[args.index('-download-top') + 1]), expected)
+                self.assertEqual(int(args[args.index('-download-top') + 1]), 0)
                 self.assertGreaterEqual(int(args[args.index('-top') + 1]), max(10, expected))
                 self.assertLessEqual(int(args[args.index('-top') + 1]), 10000)
 
@@ -180,13 +185,15 @@ class SelectionTests(unittest.TestCase):
     def test_scan_only_summary_reports_actual_candidate_counts(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(runner, 'PROJECT_DIR', Path(tmp)), \
                 patch.object(runner, 'SCAN_ONLY', True), patch.object(runner, 'TOP_N', 2), \
-                patch.object(runner.subprocess, 'run') as run:
+                patch.object(runner, 'run_mcis') as run, \
+                patch.object(runner, 'sample_download', side_effect=lambda ip, *a, **kw: probe_result(ip == '192.0.2.1')):
             (Path(tmp) / 'ipv4cidr.txt').write_text('fixture')
             rows = [dict(ip='192.0.2.1', ok=True, score_ms=10, download_ok=True, download_mbps=20),
                     dict(ip='192.0.2.2', ok=True, score_ms=20, download_ok=False, download_mbps=100),
                     dict(ip='192.0.2.3', ok=True, score_ms=30)]
-            def fake_scan(*args, **kwargs):
-                kwargs['stdout'].write('\n'.join(json.dumps(row) for row in rows))
+            def fake_scan(args, result_file, mode, timeout):
+                result_file.write_text('\n'.join(json.dumps(row) for row in rows))
+                return {}
             run.side_effect = fake_scan
             result = runner.run_mode('4', {}, 'fake')
             self.assertEqual(result['status'], 'scan_only')

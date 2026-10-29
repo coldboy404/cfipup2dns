@@ -27,11 +27,20 @@ jobs:
 
       - name: Validate Python and shell files
         run: |
-          python3 -m py_compile cfip_runner.py web/app.py docker/sync_cidr.py
+          python3 -m py_compile cfip_runner.py speed_probe.py web/app.py docker/sync_cidr.py
           python3 -m unittest discover -s tests -v
           for file in cfip.sh docker/*.sh install.sh uninstall.sh menu.sh; do
             sh -n "$file"
           done
+
+      - name: Validate browser JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          script = Path('web/templates/index.html').read_text().split('<script>', 1)[1].split('</script>', 1)[0]
+          subprocess.run(['node', '--check'], input=script, text=True, check=True)
+          PY
 
       - name: Validate Compose networking modes
         run: |

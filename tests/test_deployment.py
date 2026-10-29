@@ -9,6 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_sampling_module_is_shipped_and_limits_configured(self):
+        dockerfile = (ROOT / 'Dockerfile').read_text()
+        self.assertIn('cfip_runner.py speed_probe.py ./', dockerfile)
+        compose = (ROOT / 'docker-compose.yml').read_text()
+        for item in ('DOWNLOAD_WINDOW:-6s', 'DOWNLOAD_BUDGET:-180s', 'MAX_SCAN_SECONDS:-300'):
+            self.assertIn(item, compose)
+
     def run_up(self, mode, build=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

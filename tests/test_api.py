@@ -126,6 +126,13 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.request("POST", path, body)[0], 400)
 
     def test_run_settings_roundtrip_preserves_config_and_schedule(self):
+        tuning = {'download_window': '7s', 'download_budget': '90s', 'max_scan_seconds': '180'}
+        status, _, body = self.request('POST', '/api/config', {'records_text': 'cf.example.com', 'advanced': tuning})
+        self.assertEqual(status, 200)
+        form = json.loads(self.request('GET', '/api/config')[2])['form']
+        for key, value in tuning.items():
+            self.assertEqual(form['advanced'][key], value)
+        self.assertIn('id="advDownloadWindow" value="7s"', self.request('GET', '/')[2])
         app.save_config_from_form({"token": "hidden-run-secret", "records_text": "cf.example.com",
                                    "advanced": {"download_top": "11"}})
         schedule = app.build_cron_text(True, 6, False, "4", 3)

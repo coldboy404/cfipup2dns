@@ -26,15 +26,15 @@ PROJECT_DIR = Path(os.getenv("PROJECT_DIR", "/data/project"))
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", str(PROJECT_DIR / "config.json")))
 CRON_FILE = Path(os.getenv("CRON_FILE", "/data/cron/cfip.cron"))
 LOG_FILE = Path(os.getenv("LOG_FILE", "/data/logs/cron.log"))
-INIT_LOG_FILE = Path("/data/logs/init-mcis.log")
-BOOT_LOG_FILE = Path("/data/logs/boot.log")
+INIT_LOG_FILE = Path(os.getenv("INIT_LOG_FILE", "/data/logs/init-mcis.log"))
+BOOT_LOG_FILE = Path(os.getenv("BOOT_LOG_FILE", "/data/logs/boot.log"))
 LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(2 * 1024 * 1024)))
 LOG_KEEP_BYTES = int(os.getenv("LOG_KEEP_BYTES", str(512 * 1024)))
 LOG_API_TAIL_LINES = int(os.getenv("LOG_API_TAIL_LINES", "300"))
 LOG_MEMORY_MAX_BYTES = int(os.getenv("LOG_MEMORY_MAX_BYTES", "16000"))
 PORT = int(os.getenv("PORT", "9527"))
 WEB_BIND_HOST = os.getenv("WEB_BIND_HOST", "0.0.0.0")
-RUN_CMD = "/opt/cfipup2dns/cfip.sh"
+RUN_CMD = os.getenv("RUN_CMD", "/opt/cfipup2dns/cfip.sh")
 BEST_IP_FILES = {
     "4": PROJECT_DIR / "best_ips_v4.json",
     "6": PROJECT_DIR / "best_ips_v6.json",
@@ -70,7 +70,10 @@ ADVANCED_DEFAULTS = {
     "timeout": os.getenv("TIMEOUT", "6s"),
     "rounds": os.getenv("ROUNDS", "6"),
     "download_top": os.getenv("DOWNLOAD_TOP", "8"),
-    "download_timeout": os.getenv("DOWNLOAD_TIMEOUT", "90s"),
+    "download_timeout": os.getenv("DOWNLOAD_TIMEOUT", "15s"),
+    "download_window": os.getenv("DOWNLOAD_WINDOW", "6s"),
+    "download_budget": os.getenv("DOWNLOAD_BUDGET", "180s"),
+    "max_scan_seconds": os.getenv("MAX_SCAN_SECONDS", "300"),
     "download_mode": os.getenv("DOWNLOAD_MODE", "sequential"),
     "download_url": os.getenv("DOWNLOAD_URL", ""),
     "min_download_mbps": os.getenv("MIN_DOWNLOAD_MBPS", "0"),
@@ -187,7 +190,9 @@ def _load_best_ips_from_file():
             ip = row.get("ip")
             if not ip:
                 continue
-            items.append(normalize_ip_row(version, row))
+            normalized = normalize_ip_row(version, row)
+            normalized["result_updated_at"] = path.stat().st_mtime
+            items.append(normalized)
         ts = path.stat().st_mtime
         if updated_at is None or ts > updated_at:
             updated_at = ts
@@ -404,7 +409,7 @@ def validated_number(value, name, low, high, integer=False):
 def validate_advanced(advanced):
     for key, low, high in (("rounds", 1, 1000), ("download_top", 0, 10000),
                            ("switch_min_interval", 0, 31536000), ("switch_failure_threshold", 1, 20),
-                           ("switch_recheck_rounds", 1, 20)):
+                           ("switch_recheck_rounds", 1, 20), ("max_scan_seconds", 0, 3600)):
         validated_number(advanced[key], key, low, high, integer=True)
     for key in ("min_download_mbps", "max_latency_ms", "min_latency_ms", "max_loss_rate",
                 "switch_min_improvement", "switch_recheck_timeout"):
@@ -412,7 +417,7 @@ def validate_advanced(advanced):
         validated_number(advanced[key], key, 0 if key != "switch_recheck_timeout" else 0.1, high)
     if float(advanced["max_latency_ms"]) and float(advanced["min_latency_ms"]) > float(advanced["max_latency_ms"]):
         raise ValueError("最小延迟不能大于最大延迟")
-    for key in ("timeout", "download_timeout"):
+    for key in ("timeout", "download_timeout", "download_window", "download_budget"):
         value = advanced[key]
         if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))+", value):
             raise ValueError(f"{key} 必须为正数时长，例如 6s 或 500ms")
@@ -420,6 +425,10 @@ def validate_advanced(advanced):
         seconds = sum(float(n) * units[u] for n, u in re.findall(r"([0-9]+(?:\.[0-9]+)?)(ns|us|µs|ms|s|m|h)", value))
         if not 0 < seconds <= 86400:
             raise ValueError(f"{key} 必须大于 0 且不超过 24h")
+        if key == "download_window" and not 0.1 <= seconds <= 30:
+            raise ValueError("下载采样窗口必须在 100ms~30s 范围内")
+        if key == "download_budget" and not 1 <= seconds <= 1800:
+            raise ValueError("每族下载总预算必须在 1s~30m 范围内")
     if advanced["download_mode"] not in ("sequential", "all"):
         raise ValueError("无效下载模式")
 
@@ -518,7 +527,8 @@ def clamp_int(value, default, low, high):
 
 
 def default_cron_text():
-    return build_cron_text(True, 6, True, "both", 3)
+    # Missing schedule is disabled, matching the scheduler's actual behavior.
+    return build_cron_text(False, 6, False, "both", 3)
 
 
 def cron_state(text):
@@ -630,7 +640,11 @@ def normalize_ip_row(version, row):
         "tls_ms": row.get("tls_ms"),
         "ttfb_ms": row.get("ttfb_ms"),
         "total_ms": row.get("total_ms"),
-        "download_mbps": row.get("download_mbps"),
+        "download_mbps": row.get("download_mbps") if row.get("download_ok") is not False else None,
+        "download_ok": row.get("download_ok"),
+        "download_measured_at": row.get("download_measured_at"),
+        "download_method": row.get("download_method"),
+        "download_stop_reason": row.get("download_stop_reason"),
         "colo": row.get("colo"),
         "loss_rate": row.get("loss_rate"),
     }
@@ -661,7 +675,10 @@ def render_index():
         "ADV_TIMEOUT": html.escape(state["advanced"].get("timeout", "6s")),
         "ADV_ROUNDS": html.escape(state["advanced"].get("rounds", "6")),
         "ADV_DOWNLOAD_TOP": html.escape(state["advanced"].get("download_top", "8")),
-        "ADV_DOWNLOAD_TIMEOUT": html.escape(state["advanced"].get("download_timeout", "90s")),
+        "ADV_DOWNLOAD_TIMEOUT": html.escape(state["advanced"].get("download_timeout", "15s")),
+        "ADV_DOWNLOAD_WINDOW": html.escape(state["advanced"].get("download_window", "6s")),
+        "ADV_DOWNLOAD_BUDGET": html.escape(state["advanced"].get("download_budget", "180s")),
+        "ADV_MAX_SCAN_SECONDS": html.escape(state["advanced"].get("max_scan_seconds", "300")),
         "ADV_DOWNLOAD_MODE_SEQ": "selected" if state["advanced"].get("download_mode", "sequential") == "sequential" else "",
         "ADV_DOWNLOAD_MODE_ALL": "selected" if state["advanced"].get("download_mode", "sequential") == "all" else "",
         "ADV_DOWNLOAD_URL": html.escape(state["advanced"].get("download_url", "")),
@@ -751,6 +768,9 @@ def apply_advanced_env(env):
         "rounds": "ROUNDS",
         "download_top": "DOWNLOAD_TOP",
         "download_timeout": "DOWNLOAD_TIMEOUT",
+        "download_window": "DOWNLOAD_WINDOW",
+        "download_budget": "DOWNLOAD_BUDGET",
+        "max_scan_seconds": "MAX_SCAN_SECONDS",
         "download_mode": "DOWNLOAD_MODE",
         "download_url": "DOWNLOAD_URL",
         "min_download_mbps": "MIN_DOWNLOAD_MBPS",

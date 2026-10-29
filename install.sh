@@ -1,288 +1,116 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+# Native installer: stdlib Python, prebuilt assets, no Docker/Go/package changes.
+set -eu
+case "${1:-install}" in
+  -h|--help|help)
+    cat <<'HELP'
+Usage: bash install.sh [install|update|uninstall [--purge]]
+Requires Linux amd64/arm64, root, systemd, Python >=3.9, curl, tar, sha256sum.
+Default: latest stable GitHub release, 127.0.0.1:9527, admin/random password.
+CFIP_VERSION=vX.Y.Z pins a release. WEB_BIND_HOST and PORT set first-install bind.
+WEB_BIND_PORT is also accepted (PORT takes precedence).
+CFIP_BASE_URL overrides the releases root (latest JSON at BASE/latest;
+assets at BASE/download/TAG/NAME). CFIP_INSTALL_ROOT is a sandbox-only prefix.
+Updates preserve credentials/config/CIDRs; uninstall keeps data unless --purge.
+Management: cfip status|logs|start|stop|restart|update|uninstall|run [--scan-only|--sync]
+cfip run uses saved WebUI run/advanced settings; default scan-only, --sync allows DNS.
+cfip logs tails task log when present; otherwise follows service journal.
+HELP
+    exit 0 ;;
+  install|update|uninstall) ;;
+  *) printf '%s\n' 'Unknown action; use --help' >&2; exit 2 ;;
+esac
+for cmd in python3 curl tar sha256sum systemctl; do
+  command -v "$cmd" >/dev/null 2>&1 || { printf 'Missing prerequisite: %s\n' "$cmd" >&2; exit 1; }
+done
+python3 - "$@" <<'PY'
+import hashlib, json, os, platform, re, shutil, subprocess, sys, tarfile, tempfile
+from pathlib import Path, PurePosixPath
 
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
-PLAIN='\033[0m'
-
-if [[ ${EUID:-0} -ne 0 ]]; then
-  echo -e "${RED}[!] 请使用 root 运行 install.sh${PLAIN}"
-  exit 1
-fi
-
-PROJECT_DIR="/opt/montecarlo-ip-searcher"
-TMP_ASSETS_DIR="/tmp/cfipup2dns-assets"
-RAW_BASE="https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
-RAW_BASE_PROXY="https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main"
-UPSTREAM_REPO="https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
-UPSTREAM_REPO_PROXY="https://gh-proxy.com/https://github.com/Leo-Mu/montecarlo-ip-searcher.git"
-CONFIG_FILE="$PROJECT_DIR/config.json"
-CONFIG_BAK="/tmp/cfipup2dns-config.backup.json"
-
-mkdir -p "$TMP_ASSETS_DIR" "$PROJECT_DIR"
-
-log() { echo -e "$1"; }
-
-fetch_asset() {
-  local name="$1"
-  local dst="$TMP_ASSETS_DIR/$name"
-  curl -fsSL "$RAW_BASE/$name" -o "$dst" \
-    || curl -fsSL "$RAW_BASE_PROXY/$name" -o "$dst"
-}
-
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64|amd64)
-      MCIS_ARCH="amd64"
-      GO_ARCH="amd64"
-      ;;
-    aarch64|arm64)
-      MCIS_ARCH="arm64"
-      GO_ARCH="arm64"
-      ;;
-    *)
-      echo -e "${RED}[!] 不支持的架构: $(uname -m)（当前仅支持 amd64/arm64）${PLAIN}"
-      return 1
-      ;;
-  esac
-}
-
-install_prereqs() {
-  if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y jq wget git curl ca-certificates tar cron || \
-    apt-get install -y jq wget git curl ca-certificates tar
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y jq wget git curl ca-certificates tar cronie || \
-    dnf install -y jq wget git curl ca-certificates tar
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y jq wget git curl ca-certificates tar cronie || \
-    yum install -y jq wget git curl ca-certificates tar
-  elif command -v zypper >/dev/null 2>&1; then
-    zypper --non-interactive install jq wget git curl ca-certificates tar cron || \
-    zypper --non-interactive install jq wget git curl ca-certificates tar
-  elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm jq wget git curl ca-certificates tar cronie || \
-    pacman -Sy --noconfirm jq wget git curl ca-certificates tar
-  else
-    echo -e "${RED}[!] 未识别的包管理器（支持 apt/dnf/yum/zypper/pacman）${PLAIN}"
-    return 1
-  fi
-}
-
-version_ge() {
-  # version_ge 2.34 2.32 => true
-  [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
-}
-
-should_try_prebuilt() {
-  local mode glibc_ver
-  mode="${MCIS_INSTALL_MODE:-auto}"  # auto|prebuilt|source
-  case "$mode" in
-    prebuilt) return 0 ;;
-    source) return 1 ;;
-  esac
-
-  glibc_ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
-  if [[ -n "$glibc_ver" ]] && ! version_ge "$glibc_ver" "2.32"; then
-    echo -e "${YELLOW}[*] 检测到 glibc ${glibc_ver} < 2.32，跳过预编译包，直接源码编译${PLAIN}"
-    return 1
-  fi
-  return 0
-}
-
-download_mcis_release() {
-  local tag url url_proxy tgz
-  tag="${MCIS_TAG:-v0.2.3}"
-  tgz="$PROJECT_DIR/mcis-release.tgz"
-  url="https://github.com/Leo-Mu/montecarlo-ip-searcher/releases/download/${tag}/mcis-${tag}-linux-${MCIS_ARCH}.tar.gz"
-  url_proxy="https://gh-proxy.com/${url}"
-
-  echo -e "${YELLOW}[*] 下载 mcis 预编译包: ${tag} (${MCIS_ARCH})${PLAIN}"
-  # 防止网络卡死：超时后切换备用源，仍失败则回退源码编译
-  curl -fL --connect-timeout 6 --max-time 45 --retry 1 "$url" -o "$tgz" \
-    || curl -fL --connect-timeout 6 --max-time 45 --retry 1 "$url_proxy" -o "$tgz"
-
-  tar -xzf "$tgz" -C "$PROJECT_DIR"
-  rm -f "$tgz"
-
-  if [[ ! -x "$PROJECT_DIR/mcis" ]]; then
-    echo -e "${RED}[!] mcis 解压后不可执行${PLAIN}"
-    return 1
-  fi
-
-  mv -f "$PROJECT_DIR/mcis" "$PROJECT_DIR/montecarlo-ip-searcher"
-  chmod +x "$PROJECT_DIR/montecarlo-ip-searcher"
-}
-
-install_go() {
-  local GO_VERSION="1.25.5"
-  local GO_TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
-  if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
-    rm -rf /usr/local/go
-    wget -q --show-progress "https://go.dev/dl/${GO_TARBALL}" -O /tmp/go.tar.gz \
-      || curl -fL "https://go.dev/dl/${GO_TARBALL}" -o /tmp/go.tar.gz
-    tar -C /usr/local -xzf /tmp/go.tar.gz
-    rm -f /tmp/go.tar.gz
-  fi
-  export PATH="/usr/local/go/bin:$PATH"
-  export GOTOOLCHAIN=local
-  go env -w GOPROXY=https://goproxy.cn,direct || true
-}
-
-build_mcis_from_source() {
-  echo -e "${YELLOW}[*] 使用源码编译 mcis（兼容旧 glibc 系统）...${PLAIN}"
-  install_go
-
-  if [[ -d "$PROJECT_DIR/.git" ]]; then
-    git -C "$PROJECT_DIR" fetch --all --tags
-    git -C "$PROJECT_DIR" reset --hard origin/main
-  else
-    rm -rf "$PROJECT_DIR"
-    git clone "$UPSTREAM_REPO" "$PROJECT_DIR" || git clone "$UPSTREAM_REPO_PROXY" "$PROJECT_DIR"
-  fi
-
-  cd "$PROJECT_DIR"
-  GOTOOLCHAIN=local go mod tidy
-  if ! GOTOOLCHAIN=local go build -o montecarlo-ip-searcher ./cmd/mcis; then
-    local MAIN_FILE
-    MAIN_FILE=$(find . -name main.go -print0 | xargs -0 grep -l "package main" | head -n 1)
-    [[ -z "$MAIN_FILE" ]] && { echo -e "${RED}[!] 构建失败：未找到 main.go${PLAIN}"; return 1; }
-    GOTOOLCHAIN=local go build -o montecarlo-ip-searcher "$(dirname "$MAIN_FILE")"
-  fi
-  chmod +x "$PROJECT_DIR/montecarlo-ip-searcher"
-}
-
-binary_self_check() {
-  set +e
-  "$PROJECT_DIR/montecarlo-ip-searcher" --help >/tmp/mcis-selfcheck.log 2>&1
-  local code=$?
-  set -e
-  if [[ $code -eq 0 ]]; then
-    return 0
-  fi
-  if grep -q 'GLIBC_' /tmp/mcis-selfcheck.log; then
-    return 2
-  fi
-  return 1
-}
-
-write_config() {
-  local cfg="$1" token="$2" zone="$3" domain="$4" ttl="$5" proxied="$6"
-  cat > "$cfg" <<EOF
-{
-  "cloudflare": {
-    "token": "$token",
-    "zone_id": "$zone",
-    "domain": "$domain",
-    "ttl": $ttl,
-    "proxied": $proxied
-  }
-}
-EOF
-}
-
-setup_cron() {
-  if ! command -v crontab >/dev/null 2>&1; then
-    echo -e "${YELLOW}[!] 未检测到 crontab，已跳过定时任务设置（可手动安装 cron/cronie）${PLAIN}"
-    return 0
-  fi
-  local CRON_TMP
-  CRON_TMP=$(mktemp)
-  crontab -l 2>/dev/null | grep -v "cfip-run" > "$CRON_TMP" || true
-  echo "0 */2 * * * IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/cron.log 2>&1" >> "$CRON_TMP"
-  echo "@reboot sleep 60 && IP_MODE=both TOP_N=5 /bin/bash /usr/local/bin/cfip-run >> $PROJECT_DIR/boot.log 2>&1" >> "$CRON_TMP"
-  crontab "$CRON_TMP"
-  rm -f "$CRON_TMP"
-}
-
-# 更新时先备份旧配置，避免目录刷新导致丢失
-if [[ -f "$CONFIG_FILE" ]]; then
-  cp -f "$CONFIG_FILE" "$CONFIG_BAK" || true
-fi
-
-detect_arch
-
-echo -e "${GREEN}[*] 1/6 安装基础依赖（跨发行版）...${PLAIN}"
-install_prereqs
-
-echo -e "${GREEN}[*] 2/6 准备运行脚本资源...${PLAIN}"
-fetch_asset cfip.sh
-fetch_asset menu.sh
-chmod +x "$TMP_ASSETS_DIR/cfip.sh" "$TMP_ASSETS_DIR/menu.sh"
-
-echo -e "${GREEN}[*] 3/6 安装 mcis...${PLAIN}"
-if should_try_prebuilt; then
-  if download_mcis_release; then
-    if binary_self_check; then
-      echo -e "${GREEN}[+] 预编译 mcis 可用${PLAIN}"
-    else
-      rc=$?
-      if [[ $rc -eq 2 ]]; then
-        build_mcis_from_source
-      else
-        echo -e "${YELLOW}[!] 预编译 mcis 自检失败，自动切源码编译${PLAIN}"
-        build_mcis_from_source
-      fi
-    fi
-  else
-    echo -e "${YELLOW}[!] 预编译下载失败或超时，自动切源码编译（更稳）${PLAIN}"
-    build_mcis_from_source
-  fi
-else
-  build_mcis_from_source
-fi
-
-echo -e "${GREEN}[*] 4/6 确认 CIDR 文件...${PLAIN}"
-[[ -s "$PROJECT_DIR/ipv4cidr.txt" ]] || {
-  curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o "$PROJECT_DIR/ipv4cidr.txt" \
-    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv4cidr.txt -o "$PROJECT_DIR/ipv4cidr.txt"
-}
-[[ -s "$PROJECT_DIR/ipv6cidr.txt" ]] || {
-  curl -fsSL https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o "$PROJECT_DIR/ipv6cidr.txt" \
-    || curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/Leo-Mu/montecarlo-ip-searcher/main/ipv6cidr.txt -o "$PROJECT_DIR/ipv6cidr.txt"
-}
-
-echo -e "${GREEN}[*] 5/6 处理配置...${PLAIN}"
-# 优先使用当前配置，其次使用更新前备份配置
-if [[ ! -f "$CONFIG_FILE" && -f "$CONFIG_BAK" ]]; then
-  cp -f "$CONFIG_BAK" "$CONFIG_FILE" || true
-fi
-
-OLD_TOKEN=""; OLD_ZONE=""; OLD_DOMAIN=""; OLD_TTL="60"; OLD_PROXIED="false"
-if [[ -f "$CONFIG_FILE" ]]; then
-  OLD_TOKEN=$(jq -r '.cloudflare.token // ""' "$CONFIG_FILE" 2>/dev/null || true)
-  OLD_ZONE=$(jq -r '.cloudflare.zone_id // ""' "$CONFIG_FILE" 2>/dev/null || true)
-  OLD_DOMAIN=$(jq -r '.cloudflare.domain // ""' "$CONFIG_FILE" 2>/dev/null || true)
-  OLD_TTL=$(jq -r '.cloudflare.ttl // 60' "$CONFIG_FILE" 2>/dev/null || echo 60)
-  OLD_PROXIED=$(jq -r '.cloudflare.proxied // false' "$CONFIG_FILE" 2>/dev/null || echo false)
-fi
-
-CF_KEY="${CF_TOKEN:-$OLD_TOKEN}"
-CF_ZONE="${CF_ZONE_ID:-$OLD_ZONE}"
-CF_DOMAIN="${CF_DOMAIN:-$OLD_DOMAIN}"
-CF_TTL="${CF_TTL:-$OLD_TTL}"
-CF_PROXIED="${CF_PROXIED:-$OLD_PROXIED}"
-
-if [[ -n "$CF_KEY" && -n "$CF_ZONE" && -n "$CF_DOMAIN" ]]; then
-  write_config "$CONFIG_FILE" "$CF_KEY" "$CF_ZONE" "$CF_DOMAIN" "$CF_TTL" "$CF_PROXIED"
-  rm -f "$CONFIG_BAK" 2>/dev/null || true
-  echo -e "${GREEN}[+] 已保留/写入配置: $CONFIG_FILE${PLAIN}"
-else
-  echo -e "${YELLOW}[!] 未检测到完整 Cloudflare 配置，已跳过配置写入。${PLAIN}"
-  echo -e "${YELLOW}    可在菜单中选择“2) 修改 Cloudflare 配置”后再运行。${PLAIN}"
-fi
-
-echo -e "${GREEN}[*] 6/6 安装命令与定时任务...${PLAIN}"
-install -m 755 "$TMP_ASSETS_DIR/cfip.sh" /usr/local/bin/cfip-run
-install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip
-install -m 755 "$TMP_ASSETS_DIR/menu.sh" /usr/local/bin/cfip-menu
-setup_cron
-
-echo -e "${GREEN}=============================================${PLAIN}"
-echo -e "${GREEN}安装完成！${PLAIN}"
-echo -e "${GREEN}- 直接优选: cfip-run${PLAIN}"
-echo -e "${GREEN}- 菜单管理: cfip${PLAIN}"
-echo -e "${GREEN}=============================================${PLAIN}"
+if sys.version_info < (3, 9):
+    raise SystemExit('Python >=3.9 required')
+root = os.environ.get('CFIP_INSTALL_ROOT', '')
+if root and (not Path(root).is_absolute() or Path(root).resolve() == Path('/')):
+    raise SystemExit('CFIP_INSTALL_ROOT must be an absolute sandbox directory, not /')
+if platform.system() != 'Linux' or (not root and os.geteuid() != 0):
+    raise SystemExit('Linux and root required (except sandbox tests)')
+if not root and not Path('/run/systemd/system').is_dir():
+    raise SystemExit('A running systemd host is required')
+action = sys.argv[1] if len(sys.argv) > 1 else 'install'
+if action == 'uninstall':
+    manager = Path(root + '/opt/cfipup2dns/current/native/manage.py')
+    if not manager.is_file():
+        raise SystemExit('Native installation not found; nothing removed')
+    raise SystemExit(subprocess.call([sys.executable, str(manager), *sys.argv[1:]]))
+if len(sys.argv) > 2:
+    raise SystemExit('Unexpected arguments; use --help')
+arch = {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine())
+if not arch:
+    raise SystemExit('Supported architectures: amd64, arm64')
+base = os.environ.get('CFIP_BASE_URL', 'https://github.com/coldboy404/cfipup2dns/releases').rstrip('/')
+def fetch(url, dest):
+    subprocess.run(['curl', '--fail', '--silent', '--show-error', '--location',
+                    '--connect-timeout', '10', '--max-time', '180', '--retry', '1',
+                    '--proto', '=https,http', url, '-o', str(dest)], check=True, timeout=380)
+# Temporary files live below the caller's TMPDIR if configured.
+with tempfile.TemporaryDirectory(prefix='cfip-native-') as tmp:
+    tmp = Path(tmp)
+    version = os.environ.get('CFIP_VERSION', '')
+    if not version:
+        latest = base + '/latest' if 'CFIP_BASE_URL' in os.environ else 'https://api.github.com/repos/coldboy404/cfipup2dns/releases/latest'
+        fetch(latest, tmp / 'latest.json')
+        info = json.loads((tmp / 'latest.json').read_text())
+        if info.get('draft') or info.get('prerelease'):
+            raise SystemExit('Expected a stable published release')
+        version = info['tag_name']
+    if not re.fullmatch(r'v[0-9][A-Za-z0-9._+-]{0,99}', version) or '..' in version:
+        raise SystemExit('Invalid CFIP_VERSION release tag')
+    asset = 'cfipup2dns-linux-' + arch + '.tar.gz'
+    fetch(base + '/download/' + version + '/SHA256SUMS', tmp / 'SHA256SUMS')
+    sums = []
+    for line in (tmp / 'SHA256SUMS').read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip('*') == asset:
+            sums.append(parts[0])
+    if len(sums) != 1 or not re.fullmatch('[0-9a-fA-F]{64}', sums[0]):
+        raise SystemExit('Missing or ambiguous asset checksum')
+    fetch(base + '/download/' + version + '/' + asset, tmp / asset)
+    digest = hashlib.sha256()
+    with (tmp / asset).open('rb') as f:
+        for chunk in iter(lambda: f.read(1048576), b''):
+            digest.update(chunk)
+    if digest.hexdigest() != sums[0].lower():
+        raise SystemExit('SHA256 mismatch; installation unchanged')
+    source = tmp / 'source'
+    source.mkdir()
+    with tarfile.open(tmp / asset, 'r:gz') as archive:
+        members = archive.getmembers()
+        total = 0
+        seen = set()
+        for member in members:
+            name = PurePosixPath(member.name)
+            if name.is_absolute() or '..' in name.parts or '\\' in member.name or not (member.isdir() or member.isfile()):
+                raise SystemExit('Unsafe archive member: ' + member.name)
+            if str(name) in seen:
+                raise SystemExit('Duplicate archive member')
+            seen.add(str(name))
+            total += member.size
+            if total > 1024 * 1024 * 1024 or len(members) > 10000:
+                raise SystemExit('Archive exceeds safety limits')
+        # All entries validated before writing; links/devices/FIFOs are forbidden.
+        for member in members:
+            destination = source.joinpath(*PurePosixPath(member.name).parts)
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as src, destination.open('wb') as out:
+                    shutil.copyfileobj(src, out)
+                destination.chmod(0o755 if member.mode & 0o111 else 0o644)
+    required = ['native/manage.py', 'native/bootstrap.py', 'cfip_runner.py', 'speed_probe.py', 'web/app.py', 'config.example.json',
+                'docker/sync_cidr.py', 'install.sh', 'bundled-mcis/.mcis_version', 'bundled-mcis/montecarlo-ip-searcher',
+                'bundled-mcis/ipv4cidr.txt', 'bundled-mcis/ipv6cidr.txt']
+    if not all((source / p).is_file() for p in required):
+        raise SystemExit('Incomplete native release')
+    subprocess.run([sys.executable, str(source / 'native/manage.py'), action, '--source', str(source), '--version', version], check=True)
+PY
