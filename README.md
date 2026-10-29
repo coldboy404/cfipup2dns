@@ -39,7 +39,15 @@ BUILD_LOCAL=1 bash docker/up.sh
 适用 **Linux x86_64 / ARM64、systemd、Python 3.9+**。使用 root 或 sudo 执行，脚本从 GitHub Release 下载对应架构的预编译包并校验 SHA256，无需安装 Go。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o cfip-install.sh && sudo bash cfip-install.sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o cfip-install.sh && sudo bash cfip-install.sh
+```
+
+脚本内部自动获取最新正式版，版本查询和安装包下载优先走 GitHub 加速，失败后切换备用加速及直连；仍校验安装包 SHA256，不用在命令中填写版本和下载地址。使用第三方加速意味着信任该服务，请仅使用可信来源。
+
+如加速入口不可用，可改用直连命令：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coldboy404/cfipup2dns/main/install.sh -o cfip-install.sh && sudo env CFIP_GITHUB_PROXY=direct bash cfip-install.sh
 ```
 
 默认监听 `127.0.0.1:9527`，启用账号认证，首次安装会显示生成的登录凭据。远程使用可建立 SSH 隧道后访问 `http://127.0.0.1:9527`：

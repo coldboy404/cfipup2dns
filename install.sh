@@ -11,6 +11,7 @@ CFIP_VERSION=vX.Y.Z pins a release. WEB_BIND_HOST and PORT set first-install bin
 WEB_BIND_PORT is also accepted (PORT takes precedence).
 CFIP_BASE_URL overrides the releases root (latest JSON at BASE/latest;
 assets at BASE/download/TAG/NAME). CFIP_INSTALL_ROOT is a sandbox-only prefix.
+GitHub downloads use acceleration with fallback; CFIP_GITHUB_PROXY=direct disables it.
 Updates preserve credentials/config/CIDRs; uninstall keeps data unless --purge.
 Management: cfip status|logs|start|stop|restart|update|uninstall|run [--scan-only|--sync]
 cfip run uses saved WebUI run/advanced settings; default scan-only, --sync allows DNS.
@@ -25,6 +26,7 @@ for cmd in python3 curl tar sha256sum systemctl; do
 done
 python3 - "$@" <<'PY'
 import hashlib, json, os, platform, re, shutil, subprocess, sys, tarfile, tempfile
+from urllib.parse import urlsplit
 from pathlib import Path, PurePosixPath
 
 if sys.version_info < (3, 9):
@@ -49,9 +51,24 @@ if not arch:
     raise SystemExit('Supported architectures: amd64, arm64')
 base = os.environ.get('CFIP_BASE_URL', 'https://github.com/coldboy404/cfipup2dns/releases').rstrip('/')
 def fetch(url, dest):
-    subprocess.run(['curl', '--fail', '--silent', '--show-error', '--location',
-                    '--connect-timeout', '10', '--max-time', '180', '--retry', '1',
-                    '--proto', '=https,http', url, '-o', str(dest)], check=True, timeout=380)
+    proxy = os.environ.get('CFIP_GITHUB_PROXY', 'https://gh-proxy.com/').strip()
+    urls = [url]
+    if urlsplit(url).hostname in ('github.com', 'raw.githubusercontent.com', 'api.github.com') and proxy != 'direct':
+        parsed = urlsplit(proxy)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise SystemExit('CFIP_GITHUB_PROXY must be an HTTPS acceleration prefix or direct')
+        urls = list(dict.fromkeys([proxy.rstrip('/') + '/' + url, 'https://gh-proxy.org/' + url, url]))
+    for index, target in enumerate(urls):
+        try:
+            subprocess.run(['curl', '--fail', '--silent', '--show-error', '--location',
+                            '--connect-timeout', '8', '--max-time', '90',
+                            '--proto', '=https,http', target, '-o', str(dest)], check=True, timeout=100)
+            return
+        except subprocess.SubprocessError:
+            dest.unlink(missing_ok=True)
+            if index == len(urls) - 1:
+                raise
+            print('Download unavailable; trying fallback.', file=sys.stderr)
 # Temporary files live below the caller's TMPDIR if configured.
 with tempfile.TemporaryDirectory(prefix='cfip-native-') as tmp:
     tmp = Path(tmp)
